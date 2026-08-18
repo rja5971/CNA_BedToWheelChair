@@ -94,12 +94,23 @@ bool UGrabComponent::TryGrabRagdoll()
 	// Activate the physics handle
 	if (PhysicsHandle)
 	{
-		PhysicsHandle->GrabComponentAtLocationWithRotation(
-			GrabbableComp,
-			GrabBone,
-			FoundLocation,
-			GrabbableComp->GetComponentRotation()
-		);
+		if (Grabbable->RequiresRotationConstraint())
+		{
+			PhysicsHandle->GrabComponentAtLocationWithRotation(
+				GrabbableComp,
+				GrabBone,
+				FoundLocation,
+				GrabbableComp->GetComponentRotation()
+			);
+		}
+		else
+		{
+			PhysicsHandle->GrabComponentAtLocation(
+				GrabbableComp,
+				GrabBone,
+				FoundLocation
+			);
+		}
 	}
 
 	// Store grab state

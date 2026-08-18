@@ -45,4 +45,10 @@ public:
 	 * Used e.g. by the belt to redirect the grab to the patient's spine bone.
 	 */
 	virtual FName GetGrabBoneOverride() const { return NAME_None; }
+
+	/**
+	 * Optional: whether the grab should constrain rotation (like a solid object) 
+	 * or just location (like a heavy ragdoll or pendulum).
+	 */
+	virtual bool RequiresRotationConstraint() const { return true; }
 };

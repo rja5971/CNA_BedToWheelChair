@@ -11,6 +11,7 @@
 #include "PhysicsEngine/PhysicalAnimationComponent.h"
 #include "PhysicsEngine/BodyInstance.h"
 #include "Animation/AnimSequence.h"
+#include "Engine/Engine.h"
 
 APatientActor::APatientActor()
 {
@@ -23,6 +24,7 @@ APatientActor::APatientActor()
 	// Physics setup — patient is physics-driven, cannot move on their own.
 	PatientMesh->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
 	PatientMesh->SetCollisionProfileName(TEXT("PhysicsActor"));
+	PatientMesh->SetCollisionResponseToChannel(ECC_Pawn, ECR_Ignore);
 
 	// Create the physical animation component (raw engine component)
 	PhysicalAnimation = CreateDefaultSubobject<UPhysicalAnimationComponent>(TEXT("PhysicalAnimation"));
@@ -254,10 +256,17 @@ FTransform APatientActor::GetBeltAttachTransform() const
 {
 	if (PatientMesh)
 	{
-		FName BoneName = ResolveBoneName(BeltAttachRole);
+		FName BoneName = GetBeltAttachBoneName();
 		if (!BoneName.IsNone())
 		{
-			return PatientMesh->GetBoneTransform(PatientMesh->GetBoneIndex(BoneName));
+			int32 BoneIdx = PatientMesh->GetBoneIndex(BoneName);
+			if (BoneIdx != INDEX_NONE)
+			{
+				FTransform BoneTransform = PatientMesh->GetBoneTransform(BoneIdx);
+				// Apply the local-space offset for fine-tuning belt position
+				FTransform OffsetTransform(BeltAttachRotationOffset.Quaternion(), BeltAttachOffset);
+				return OffsetTransform * BoneTransform;
+			}
 		}
 	}
 	return FTransform::Identity;
@@ -265,7 +274,56 @@ FTransform APatientActor::GetBeltAttachTransform() const
 
 FName APatientActor::GetBeltAttachBoneName() const
 {
-	return ResolveBoneName(BeltAttachRole);
+	// Direct override takes priority over role-based resolution
+	if (!BeltAttachBoneOverride.IsNone())
+	{
+		// Validate that the override bone actually exists in the skeleton
+		if (PatientMesh)
+		{
+			int32 BoneIdx = PatientMesh->GetBoneIndex(BeltAttachBoneOverride);
+			if (BoneIdx == INDEX_NONE)
+			{
+				UE_LOG(LogTemp, Warning, TEXT("PatientActor: BeltAttachBoneOverride '%s' does not exist in skeleton! Falling back to role-based resolution."),
+					*BeltAttachBoneOverride.ToString());
+				
+				// Show on-screen warning in editor/PIE
+				if (GEngine)
+				{
+					GEngine->AddOnScreenDebugMessage(-1, 5.0f, FColor::Red,
+						FString::Printf(TEXT("BELT ERROR: Bone '%s' not found in skeleton!"), *BeltAttachBoneOverride.ToString()));
+				}
+			}
+			else
+			{
+				return BeltAttachBoneOverride;
+			}
+		}
+		else
+		{
+			return BeltAttachBoneOverride;
+		}
+	}
+
+	FName ResolvedName = ResolveBoneName(BeltAttachRole);
+
+	// Validate the resolved bone name
+	if (PatientMesh && !ResolvedName.IsNone())
+	{
+		int32 BoneIdx = PatientMesh->GetBoneIndex(ResolvedName);
+		if (BoneIdx == INDEX_NONE)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("PatientActor: Resolved belt bone '%s' (from role %d) does not exist in skeleton!"),
+				*ResolvedName.ToString(), (int32)BeltAttachRole);
+
+			if (GEngine)
+			{
+				GEngine->AddOnScreenDebugMessage(-1, 5.0f, FColor::Red,
+					FString::Printf(TEXT("BELT ERROR: Resolved bone '%s' not found in skeleton!"), *ResolvedName.ToString()));
+			}
+		}
+	}
+
+	return ResolvedName;
 }
 
 void APatientActor::OnBeltAttached(UBeltComponent* Belt)

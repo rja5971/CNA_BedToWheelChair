@@ -45,6 +45,7 @@ public:
 	virtual UPrimitiveComponent* GetGrabbableComponent() const override;
 	virtual TArray<FName> GetGrabbableBoneNames() const override;
 	virtual FName GetGrabBoneOverride() const override;
+	virtual bool RequiresRotationConstraint() const override { return true; }
 
 	/** Get the belt component */
 	UFUNCTION(BlueprintCallable, Category = "Belt")
@@ -76,8 +77,13 @@ protected:
 	TObjectPtr<USphereComponent> AttachProximity;
 
 	/** Distance (in cm) at which the belt auto-attaches to the patient while being carried */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Belt|Config")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Belt|Detection",
+		meta = (ClampMin = "10.0", ClampMax = "500.0"))
 	float AttachRadius = 75.0f;
+
+	/** Show the detection sphere in-game for debugging attachment range */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Belt|Detection")
+	bool bShowDetectionRadius = false;
 
 private:
 	/** Whether the belt is currently being held by the nurse */

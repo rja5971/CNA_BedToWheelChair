@@ -10,6 +10,7 @@
 #include "Components/SceneComponent.h"
 #include "UObject/ConstructorHelpers.h"
 #include "EngineUtils.h"
+#include "DrawDebugHelpers.h"
 
 ABeltActor::ABeltActor()
 {
@@ -22,7 +23,10 @@ ABeltActor::ABeltActor()
 	// Physics is enabled only when the nurse grabs it to carry it.
 	BeltMesh->SetSimulatePhysics(false);
 	BeltMesh->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
-	BeltMesh->SetCollisionProfileName(TEXT("PhysicsActor"));
+	BeltMesh->SetCollisionObjectType(ECC_WorldDynamic);
+	BeltMesh->SetCollisionResponseToAllChannels(ECR_Block);
+	BeltMesh->SetCollisionResponseToChannel(ECC_Pawn, ECR_Ignore);
+	BeltMesh->SetCollisionResponseToChannel(ECC_PhysicsBody, ECR_Ignore);
 	// Damping so the belt settles calmly instead of spinning like a coin
 	BeltMesh->SetLinearDamping(1.0f);
 	BeltMesh->SetAngularDamping(5.0f);
@@ -47,7 +51,11 @@ ABeltActor::ABeltActor()
 	HandleFrontVisual = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("HandleFrontVisual"));
 	HandleFrontVisual->SetupAttachment(HandleFront);
 	HandleFrontVisual->SetRelativeLocation(FVector::ZeroVector);
-	HandleFrontVisual->SetCollisionProfileName(TEXT("BlockAllDynamic"));
+	HandleFrontVisual->SetCollisionObjectType(ECC_WorldDynamic);
+	HandleFrontVisual->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+	HandleFrontVisual->SetCollisionResponseToAllChannels(ECR_Block);
+	HandleFrontVisual->SetCollisionResponseToChannel(ECC_Pawn, ECR_Ignore);
+	HandleFrontVisual->SetCollisionResponseToChannel(ECC_PhysicsBody, ECR_Ignore);
 	HandleFrontVisual->SetSimulatePhysics(false);
 	HandleFrontVisual->SetWorldScale3D(FVector(0.18f));
 
@@ -79,6 +87,14 @@ void ABeltActor::BeginPlay()
 	{
 		HandleFront->SetRelativeLocation(HandleOffset);
 	}
+
+	// Sync the proximity sphere to the configurable radius
+	if (AttachProximity)
+	{
+		AttachProximity->SetSphereRadius(AttachRadius);
+		AttachProximity->SetHiddenInGame(!bShowDetectionRadius);
+		AttachProximity->SetVisibility(bShowDetectionRadius);
+	}
 }
 
 void ABeltActor::Tick(float DeltaTime)
@@ -87,6 +103,13 @@ void ABeltActor::Tick(float DeltaTime)
 
 	// Only check for attachment while belt is being carried and not yet attached
 	if (!bIsBeingCarried || !BeltComp || BeltComp->IsAttached()) return;
+
+	// Debug visualization of detection radius
+	if (bShowDetectionRadius)
+	{
+		DrawDebugSphere(GetWorld(), GetActorLocation(), AttachRadius,
+			16, FColor::Yellow, false, -1.f, 0, 1.5f);
+	}
 
 	// Find any nearby actor that implements IBeltAttachable within AttachRadius
 	FVector BeltLocation = GetActorLocation();

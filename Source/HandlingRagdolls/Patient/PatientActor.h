@@ -62,6 +62,8 @@ public:
 	virtual void OnReleased(UGrabComponent* Grabber) override;
 	virtual UPrimitiveComponent* GetGrabbableComponent() const override;
 	virtual TArray<FName> GetGrabbableBoneNames() const override;
+	virtual FName GetGrabBoneOverride() const override { return NAME_None; }
+	virtual bool RequiresRotationConstraint() const override { return false; }
 
 	// ============================================================
 	// IBeltAttachable Implementation
@@ -241,8 +243,25 @@ protected:
 	TArray<EPatientBoneRole> GrabbableRoles;
 
 	/** Logical bone role where the belt attaches */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Patient|Config")
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Patient|Belt Attachment")
 	EPatientBoneRole BeltAttachRole = EPatientBoneRole::Spine03;
+
+	/**
+	 * Optional: override the resolved bone name directly.
+	 * If set (not "None"), this takes priority over BeltAttachRole.
+	 * Use this when the BoneMapping doesn't have the exact bone you need,
+	 * or to fine-tune placement on a specific skeleton.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Patient|Belt Attachment")
+	FName BeltAttachBoneOverride = NAME_None;
+
+	/** Offset from the resolved bone's transform (local space) for fine-tuning belt position */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Patient|Belt Attachment")
+	FVector BeltAttachOffset = FVector::ZeroVector;
+
+	/** Rotation offset from the resolved bone's transform (local space) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Patient|Belt Attachment")
+	FRotator BeltAttachRotationOffset = FRotator::ZeroRotator;
 
 	/** Logical bone roles that count as "supporting the neck" when grabbed */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Patient|Config")

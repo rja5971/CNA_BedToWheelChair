@@ -15,14 +15,8 @@ void UBeltLiftState::EnterState(UTransferStateMachine* StateMachine)
 	bBeltIsBeingGrabbed = false;
 	CurrentLiftHeight = 0.0f;
 
-	// Set patient to BeingLifted state — this frees the pelvis so they can be moved
-	IIPatient* Patient = StateMachine->GetPatientInterface();
-	if (Patient)
-	{
-		Patient->SetPatientState(EPatientState::BeingLifted);
-		FVector PelvisPos = Patient->GetPelvisLocation();
-		StartingPelvisZ = PelvisPos.Z;
-	}
+	// Don't un-anchor the pelvis immediately! Wait until they actually grab the belt.
+	// Otherwise they instantly collapse when the belt attaches.
 }
 
 void UBeltLiftState::TickState(float DeltaTime)
@@ -37,8 +31,21 @@ void UBeltLiftState::TickState(float DeltaTime)
 
 	if (!Patient || !Belt) return;
 
+	bool bWasBeingGrabbed = bBeltIsBeingGrabbed;
 	// Check if belt is being used to lift
 	bBeltIsBeingGrabbed = Belt->IsBeingLifted();
+
+	if (bBeltIsBeingGrabbed && !bWasBeingGrabbed)
+	{
+		// Just grabbed! Free the pelvis.
+		Patient->SetPatientState(EPatientState::BeingLifted);
+		StartingPelvisZ = Patient->GetPelvisLocation().Z;
+	}
+	else if (!bBeltIsBeingGrabbed && bWasBeingGrabbed && !bLiftComplete)
+	{
+		// Let go before lift complete! Re-anchor them (e.g. BeltAttached).
+		Patient->SetPatientState(EPatientState::BeltAttached);
+	}
 
 	if (bBeltIsBeingGrabbed)
 	{
