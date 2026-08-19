@@ -82,6 +82,19 @@ void ABeltActor::BeginPlay()
 {
 	Super::BeginPlay();
 
+	// Enforce collision ignores at runtime so Blueprints don't override them.
+	// This prevents the belt from violently orbiting the VR hand when grabbed.
+	if (BeltMesh)
+	{
+		BeltMesh->SetCollisionResponseToChannel(ECC_Pawn, ECR_Ignore);
+		BeltMesh->SetCollisionResponseToChannel(ECC_PhysicsBody, ECR_Ignore);
+	}
+	if (HandleFrontVisual)
+	{
+		HandleFrontVisual->SetCollisionResponseToChannel(ECC_Pawn, ECR_Ignore);
+		HandleFrontVisual->SetCollisionResponseToChannel(ECC_PhysicsBody, ECR_Ignore);
+	}
+
 	// Apply the configurable handle offset
 	if (HandleFront)
 	{

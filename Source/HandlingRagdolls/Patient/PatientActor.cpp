@@ -65,11 +65,17 @@ void APatientActor::BeginPlay()
 {
 	Super::BeginPlay();
 
+	// Enforce collision ignores at runtime so Blueprints don't override them.
+	// This prevents the VR player from pushing the patient out of position.
+	if (PatientMesh)
+	{
+		PatientMesh->SetCollisionResponseToChannel(ECC_Pawn, ECR_Ignore);
+	}
+
 	// Initialize the physics component with our mesh and config references
 	if (PatientPhysics)
 	{
 		PatientPhysics->Initialize(PatientMesh, PhysicalAnimation, SpineConfig, BoneMapping);
-
 		// Apply body realism setup BEFORE enabling physics
 		PatientPhysics->ApplyRestPose();
 		PatientPhysics->ApplyMassDistribution();
