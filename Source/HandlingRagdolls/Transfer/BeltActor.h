@@ -45,7 +45,7 @@ public:
 	virtual UPrimitiveComponent* GetGrabbableComponent() const override;
 	virtual TArray<FName> GetGrabbableBoneNames() const override;
 	virtual FName GetGrabBoneOverride() const override;
-	virtual bool RequiresRotationConstraint() const override { return true; }
+	virtual bool RequiresRotationConstraint() const override;
 
 	/** Get the belt component */
 	UFUNCTION(BlueprintCallable, Category = "Belt")

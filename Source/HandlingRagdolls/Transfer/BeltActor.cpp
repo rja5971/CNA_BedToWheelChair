@@ -269,11 +269,27 @@ FName ABeltActor::GetGrabBoneOverride() const
 		AActor* Patient = BeltComp->GetAttachedPatient();
 		if (Patient)
 		{
-			if (IIBeltAttachable* BeltTarget = Cast<IIBeltAttachable>(Patient))
+			IIBeltAttachable* BeltTarget = Cast<IIBeltAttachable>(Patient);
+			if (BeltTarget)
 			{
 				return BeltTarget->GetBeltAttachBoneName();
 			}
 		}
 	}
 	return NAME_None;
+}
+
+bool ABeltActor::RequiresRotationConstraint() const
+{
+	// If the belt is attached to the patient, we are lifting a heavy human.
+	// We do NOT want a rotation constraint, otherwise turning the VR wrist will
+	// rigidly spin the patient in the air like a propeller.
+	if (BeltComp && BeltComp->IsAttached())
+	{
+		return false;
+	}
+
+	// If the belt is unattached and being carried, we DO want a rotation constraint
+	// so it acts like a rigid tool in the hand, making it easier to aim at the patient.
+	return true;
 }

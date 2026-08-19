@@ -94,23 +94,22 @@ bool UGrabComponent::TryGrabRagdoll()
 	// Activate the physics handle
 	if (PhysicsHandle)
 	{
-		if (Grabbable->RequiresRotationConstraint())
+		FRotator InitialRotation = GrabbableComp->GetComponentRotation();
+		
+		if (!Grabbable->RequiresRotationConstraint())
 		{
-			PhysicsHandle->GrabComponentAtLocationWithRotation(
-				GrabbableComp,
-				GrabBone,
-				FoundLocation,
-				GrabbableComp->GetComponentRotation()
-			);
+			// For heavy ragdolls, we force the grab rotation to be perfectly upright
+			// so they don't tilt or spin out of control like a propeller.
+			InitialRotation.Pitch = 0.0f;
+			InitialRotation.Roll = 0.0f;
 		}
-		else
-		{
-			PhysicsHandle->GrabComponentAtLocation(
-				GrabbableComp,
-				GrabBone,
-				FoundLocation
-			);
-		}
+
+		PhysicsHandle->GrabComponentAtLocationWithRotation(
+			GrabbableComp,
+			GrabBone,
+			FoundLocation,
+			InitialRotation
+		);
 	}
 
 	// Store grab state
@@ -275,6 +274,21 @@ void UGrabComponent::UpdateGrabTarget()
 		{
 			TargetLocation = Root->GetComponentLocation();
 			TargetRotation = Root->GetComponentRotation();
+		}
+	}
+
+	// Restrict rotation on tick for heavy objects so they don't tilt with the wrist
+	if (GrabbedActor)
+	{
+		IIGrabbable* Grabbable = Cast<IIGrabbable>(GrabbedActor);
+		if (Grabbable && !Grabbable->RequiresRotationConstraint())
+		{
+			TargetRotation.Pitch = 0.0f;
+			TargetRotation.Roll = 0.0f;
+			
+			// Optional: If you also want to prevent them from spinning in Yaw (Z-axis),
+			// you could lock TargetRotation.Yaw to a specific value here. But usually, 
+			// letting them turn left/right with your body/hand is desired.
 		}
 	}
 
