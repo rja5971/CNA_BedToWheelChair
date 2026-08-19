@@ -168,18 +168,11 @@ void USeatedTransitionComponent::FreezeInPlace()
 
 	bSettling = false;
 
-	// Freeze all bodies in their CURRENT position — wherever physics settled them.
-	// No animation, no target pose. Just lock whatever the physics produced.
-	FName PelvisBone = ResolveBoneName(EPatientBoneRole::Pelvis);
-	if (!PelvisBone.IsNone())
-	{
-		Mesh->SetAllBodiesBelowSimulatePhysics(PelvisBone, false, /*bIncludeSelf=*/true);
-	}
-	else
-	{
-		Mesh->SetAllBodiesSimulatePhysics(false);
-	}
-
+	// We DO NOT manually turn off SimulatePhysics here!
+	// Doing so instantly snaps the skeletal mesh back to its rest pose (sleeping on the bed)
+	// before the PatientPhysicsComponent has a chance to capture the upright transform.
+	// Instead, we just broadcast the event, and ApplyStateConfig will correctly handle 
+	// the physics states to lock them in place.
 	bSeatedLocked = true;
 
 	// Disable tick — done

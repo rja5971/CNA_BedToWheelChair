@@ -29,18 +29,17 @@ void UPatientPhysicsComponent::TickComponent(float DeltaTime, ELevelTick TickTyp
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 
 	// --- HOLD POSE: re-assert pinned (Anchored) bones to their captured transforms ---
-	// These bones are Kinematic (infinite mass), but we force them back to the
-	// captured LOCAL pose every PostPhysics frame so they move with the Actor.
+	// These bones SIMULATE (so they drive the mesh), but we force them back to the
+	// captured pose every PostPhysics frame and kill their velocity, so they hold
+	// the player-folded upright pose exactly.
 	if (bHoldingPose && Mesh)
 	{
-		FTransform BaseTransform = GetOwner()->GetActorTransform();
 		for (const TPair<FName, FTransform>& Pair : HeldBoneTransforms)
 		{
 			FBodyInstance* BI = Mesh->GetBodyInstance(Pair.Key);
 			if (BI)
 			{
-				FTransform WorldTM = Pair.Value * BaseTransform;
-				BI->SetBodyTransform(WorldTM, ETeleportType::TeleportPhysics, false);
+				BI->SetBodyTransform(Pair.Value, ETeleportType::TeleportPhysics, false);
 				BI->SetLinearVelocity(FVector::ZeroVector, false);
 				BI->SetAngularVelocityInRadians(FVector::ZeroVector, false);
 			}
@@ -48,9 +47,10 @@ void UPatientPhysicsComponent::TickComponent(float DeltaTime, ELevelTick TickTyp
 	}
 
 	// --- PIVOT POSE: position-pinned + pitch/roll locked, but yaw driven externally ---
+	// Each pivot bone holds its captured XYZ position and pitch/roll, but its yaw
+	// is overridden by PivotTargetYaw (relative to PivotBaseYaw).
 	if (PivotBoneTransforms.Num() > 0 && Mesh)
 	{
-		FTransform BaseTransform = GetOwner()->GetActorTransform();
 		const float YawDelta = PivotTargetYaw - PivotBaseYaw;
 		const FQuat YawRotation = FQuat(FVector::UpVector, FMath::DegreesToRadians(YawDelta));
 
@@ -59,8 +59,8 @@ void UPatientPhysicsComponent::TickComponent(float DeltaTime, ELevelTick TickTyp
 			FBodyInstance* BI = Mesh->GetBodyInstance(Pair.Key);
 			if (BI)
 			{
-				// Convert local to world, then apply yaw delta
-				FTransform PivotedTransform = Pair.Value * BaseTransform;
+				// Take the original captured rotation and apply yaw delta to it
+				FTransform PivotedTransform = Pair.Value;
 				FQuat OrigRotation = PivotedTransform.GetRotation();
 				FQuat NewRotation = YawRotation * OrigRotation;
 				PivotedTransform.SetRotation(NewRotation);
@@ -271,21 +271,18 @@ void UPatientPhysicsComponent::ApplyStateConfig(UPatientStateConfig* Config)
 	if (!SkelAsset) return;
 	const FReferenceSkeleton& RefSkel = SkelAsset->GetRefSkeleton();
 
-	// --- Capture CURRENT LOCAL transforms of all bodies BEFORE changing anything ---
+	// --- Capture CURRENT world transforms of all bodies BEFORE changing anything ---
 	// This is the pose the player folded the patient into. Anchored bones will be
-	// pinned to these transforms relative to the Actor every frame so they HOLD this pose,
-	// even if the Actor (like a wheelchair) moves around the world.
+	// pinned to these transforms every frame so they HOLD this pose.
 	TMap<FName, FTransform> PreTransforms;
 	TArray<FName> AllBones;
 	Mesh->GetBoneNames(AllBones);
-	FTransform BaseTransform = GetOwner()->GetActorTransform();
 	for (const FName& B : AllBones)
 	{
 		FBodyInstance* BI = Mesh->GetBodyInstance(B);
 		if (BI)
 		{
-			FTransform WorldTM = BI->GetUnrealWorldTransform();
-			PreTransforms.Add(B, WorldTM.GetRelativeTransform(BaseTransform));
+			PreTransforms.Add(B, BI->GetUnrealWorldTransform());
 		}
 	}
 
@@ -406,10 +403,8 @@ void UPatientPhysicsComponent::ApplyStateConfig(UPatientStateConfig* Config)
 		float StrengthOverride = -1.0f;
 		const EBoneBehavior Beh = ResolveBoneBehavior(BoneIdx, StrengthOverride);
 
-		// Stiff and Free bodies simulate natively. Anchored and Pivot bodies become Kinematic
-		// (infinite mass) so they cannot be ripped out of place by physics grabs.
-		bool bShouldSimulate = (Beh == EBoneBehavior::Stiff || Beh == EBoneBehavior::Free);
-		BI->SetInstanceSimulatePhysics(bShouldSimulate, false, true);
+		// Every body simulates (so it drives the mesh). Anchored bodies get pinned.
+		BI->SetInstanceSimulatePhysics(true, false, true);
 
 		FPhysicalAnimationData Data;
 		Data.bIsLocalSimulation = false;
@@ -423,8 +418,7 @@ void UPatientPhysicsComponent::ApplyStateConfig(UPatientStateConfig* Config)
 			if (Captured)
 			{
 				HeldBoneTransforms.Add(BoneName, *Captured);
-				FTransform WorldTM = *Captured * BaseTransform;
-				BI->SetBodyTransform(WorldTM, ETeleportType::TeleportPhysics, false);
+				BI->SetBodyTransform(*Captured, ETeleportType::TeleportPhysics, false);
 				BI->SetLinearVelocity(FVector::ZeroVector, false);
 				BI->SetAngularVelocityInRadians(FVector::ZeroVector, false);
 			}
@@ -435,12 +429,14 @@ void UPatientPhysicsComponent::ApplyStateConfig(UPatientStateConfig* Config)
 		case EBoneBehavior::Pivot:
 		{
 			// Position-pinned + pitch/roll locked, but yaw is free (driven externally).
+			// Capture the initial transform and store in PivotBoneTransforms.
+			// The tick function will re-assert position + pitch/roll and apply the
+			// externally-driven PivotTargetYaw.
 			const FTransform* Captured = PreTransforms.Find(BoneName);
 			if (Captured)
 			{
 				PivotBoneTransforms.Add(BoneName, *Captured);
-				FTransform WorldTM = *Captured * BaseTransform;
-				BI->SetBodyTransform(WorldTM, ETeleportType::TeleportPhysics, false);
+				BI->SetBodyTransform(*Captured, ETeleportType::TeleportPhysics, false);
 				BI->SetLinearVelocity(FVector::ZeroVector, false);
 				BI->SetAngularVelocityInRadians(FVector::ZeroVector, false);
 			}
@@ -449,7 +445,10 @@ void UPatientPhysicsComponent::ApplyStateConfig(UPatientStateConfig* Config)
 			break;
 		}
 		case EBoneBehavior::Stiff:
-			// Local-space simulation
+			// Local-space simulation: holds each bone's orientation RELATIVE to its
+			// parent (posture), rather than a world orientation. This holds the pose
+			// correctly even when the actor is rotated/folded, and avoids violent
+			// snapping toward a mismatched world animation pose.
 			Data.bIsLocalSimulation = true;
 			Data.OrientationStrength = (StrengthOverride >= 0.0f) ? StrengthOverride : Config->StiffOrientationStrength;
 			Data.AngularVelocityStrength = Config->StiffAngularVelocityStrength;
