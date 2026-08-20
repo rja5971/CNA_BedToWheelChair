@@ -110,6 +110,13 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Grab|Config", meta = (ClampMin = "0.0"))
 	float GrabAngularDamping = 100.0f;
 
+	/** 
+	 * Offset (in degrees) to apply when a heavy object is forced to face the player. 
+	 * Tweak this if the mesh's front face doesn't exactly match its local X-axis. 
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grab|Rotation")
+	float HeavyObjectFaceYawOffset = 40.0f;
+
 	/** Interpolation speed for the physics handle target update */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Grab|Config", meta = (ClampMin = "0.0"))
 	float GrabInterpolationSpeed = 50.0f;

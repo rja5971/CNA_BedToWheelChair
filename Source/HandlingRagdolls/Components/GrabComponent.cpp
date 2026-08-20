@@ -94,21 +94,17 @@ bool UGrabComponent::TryGrabRagdoll()
 	// Activate the physics handle
 	if (PhysicsHandle)
 	{
-		FRotator InitialRotation = GrabbableComp->GetComponentRotation();
-		
-		if (!Grabbable->RequiresRotationConstraint())
-		{
-			// For heavy ragdolls, we force the grab rotation to be perfectly upright
-			// so they don't tilt or spin out of control like a propeller.
-			InitialRotation.Pitch = 0.0f;
-			InitialRotation.Roll = 0.0f;
-		}
+		// We ALWAYS want rotational stiffness now!
+		// For the Belt (true), it matches the wrist. 
+		// For the Patient (false), it will be mathematically forced to face the player in Tick.
+		PhysicsHandle->SetAngularStiffness(GrabAngularStiffness);
+		PhysicsHandle->SetAngularDamping(GrabAngularDamping);
 
 		PhysicsHandle->GrabComponentAtLocationWithRotation(
 			GrabbableComp,
 			GrabBone,
 			FoundLocation,
-			InitialRotation
+			GrabbableComp->GetComponentRotation()
 		);
 	}
 
@@ -277,18 +273,32 @@ void UGrabComponent::UpdateGrabTarget()
 		}
 	}
 
-	// Restrict rotation on tick for heavy objects so they don't tilt with the wrist
+	// NEW LOGIC: Lock heavy objects (patients) to always face the player
 	if (GrabbedActor)
 	{
 		IIGrabbable* Grabbable = Cast<IIGrabbable>(GrabbedActor);
 		if (Grabbable && !Grabbable->RequiresRotationConstraint())
 		{
+			// Face the VR pawn (the owner of this component)
+			if (AActor* OwnerActor = GetOwner())
+			{
+				UPrimitiveComponent* GrabbedComp = PhysicsHandle->GetGrabbedComponent();
+				if (GrabbedComp)
+				{
+					FVector DirectionToPlayer = OwnerActor->GetActorLocation() - GrabbedComp->GetComponentLocation();
+					DirectionToPlayer.Z = 0.0f; // Keep it upright
+					
+					if (!DirectionToPlayer.IsNearlyZero())
+					{
+						TargetRotation = DirectionToPlayer.Rotation();
+						TargetRotation.Yaw += HeavyObjectFaceYawOffset;
+					}
+				}
+			}
+            
+			// Force Pitch and Roll to be zero so they never lean or tilt
 			TargetRotation.Pitch = 0.0f;
 			TargetRotation.Roll = 0.0f;
-			
-			// Optional: If you also want to prevent them from spinning in Yaw (Z-axis),
-			// you could lock TargetRotation.Yaw to a specific value here. But usually, 
-			// letting them turn left/right with your body/hand is desired.
 		}
 	}
 
