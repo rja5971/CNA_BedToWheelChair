@@ -35,9 +35,10 @@ The runtime flow is:
 
 The `BeingTransferred` data asset uses pivot behavior: the pelvis position remains
 fixed while two belt-hand positions drive patient yaw. Releasing the final belt
-handle inside any wheelchair seat zone immediately aligns the pelvis to that
-chair's target and begins the gradual blend into
-`/Game/Animations/AN_Patient_Sitting`.
+handle inside any wheelchair seat zone immediately disables ragdoll control,
+aligns the animated pelvis exactly to that chair's target, and starts
+`/Game/Animations/AN_Patient_Sitting` at full weight in the same frame. Final yaw
+uses wheelchair forward with the patient's calibrated `-180°` skeletal-axis offset.
 
 ## Important integration note
 

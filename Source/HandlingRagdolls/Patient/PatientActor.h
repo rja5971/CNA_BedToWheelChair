@@ -219,13 +219,11 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Patient|Config")
 	TArray<TObjectPtr<UPatientStateConfig>> StateConfigs;
 
-	/**
-	 * TESTING ONLY: start the patient as a fully limp ragdoll (no muscle-tone
-	 * motor drive) so the nurse can freely grab and move the body ("superman"
-	 * mode). Turn this OFF later to use the realistic hybrid physical animation.
+	/** Deprecated test setting retained for serialized Blueprint compatibility.
+	 * Runtime startup always applies the current state's data asset.
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Patient|Config")
-	bool bTestModeStartLimp = true;
+	bool bTestModeStartLimp = false;
 
 	/**
 	 * If true, the belt can be attached without supporting the neck first.

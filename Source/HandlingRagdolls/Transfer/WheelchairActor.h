@@ -79,7 +79,7 @@ protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Wheelchair")
 	TObjectPtr<UBoxComponent> SeatZone;
 
-	/** The exact position/rotation the patient should end up in */
+	/** Exact pelvis position; final facing follows chair forward with skeletal-axis calibration. */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Wheelchair")
 	TObjectPtr<USceneComponent> SeatTarget;
 

@@ -63,11 +63,18 @@ bool AWheelchairActor::IsReadyToReceive() const
 
 FTransform AWheelchairActor::GetTargetSeatTransform() const
 {
+	FTransform Result = GetActorTransform();
 	if (SeatTarget)
 	{
-		return SeatTarget->GetComponentTransform();
+		Result = SeatTarget->GetComponentTransform();
 	}
-	return GetActorTransform();
+
+	// SeatTarget controls the exact pelvis position. Chair facing is authoritative
+	// for orientation, with a 180-degree calibration for the imported patient's
+	// opposite skeletal forward axis.
+	const FRotator ChairFacing(0.0f, GetActorRotation().Yaw - 180.0f, 0.0f);
+	Result.SetRotation(ChairFacing.Quaternion());
+	return Result;
 }
 
 float AWheelchairActor::GetAcceptanceRadius() const

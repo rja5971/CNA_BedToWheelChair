@@ -62,8 +62,17 @@ The patient was refactored from a 700-line god class into focused components (SR
 Each config lists bone GROUPS (Pelvis, Spine, Neck, Head, Arms, Legs) with a behavior
 (Anchored / Stiff / Free). The state machine drives transitions; the config drives physics.
 Bed positioning remains physics-driven. Once the patient is released inside a
-wheelchair `SeatZone`, the pelvis aligns to that chair's `SeatTarget` and the mesh
-blends into `/Game/Animations/AN_Patient_Sitting` over the configured duration.
+wheelchair `SeatZone`, ragdoll control is disabled immediately, the animated pelvis
+snaps exactly to that chair's `SeatTarget`, and `/Game/Animations/AN_Patient_Sitting`
+takes full control in the same frame. `SeatTarget` supplies the pelvis position;
+the wheelchair actor supplies final facing. A calibrated `-180°` yaw compensates
+for the imported patient's opposite skeletal forward axis, so a rotated target
+component cannot seat the patient backward.
+
+Direct patient grabbing is state-gated. `LyingDown`, `BeingSupported`, and bed
+`Seated` accept only configured neck-support bones; generic physics bodies cannot
+bypass this rule. Startup also always applies the current state data asset instead
+of allowing a global limp-test option to skip its Anchored/Stiff/Free behaviors.
 
 **State machine decoupling:** `UTransferStateMachine` holds `TScriptInterface<IIPatient>`,
 not a concrete `APatientActor*`. State sequence is a data-driven `TArray<ETransferState>`.

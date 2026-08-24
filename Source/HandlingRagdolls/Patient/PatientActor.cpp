@@ -101,26 +101,19 @@ void APatientActor::BeginPlay()
 		CooperationRamp->Initialize(PatientPhysics, BoneMapping);
 	}
 
-	if (bTestModeStartLimp)
+	// State data is authoritative, including at startup. Do not bypass the
+	// initial state's anchored/stiff/free rules with a global limp test mode.
+	EnablePhysicalAnimation();
+
+	UPatientStateConfig* InitialConfig = FindStateConfig(CurrentState);
+	if (InitialConfig && PatientPhysics)
 	{
-		// TESTING: fully limp ragdoll so the body can be freely grabbed/moved.
-		EnableRagdoll();
+		PatientPhysics->ApplyStateConfig(InitialConfig);
 	}
 	else
 	{
-		// Enable physics, then apply the initial state's config if one exists.
-		EnablePhysicalAnimation();
-
-		UPatientStateConfig* InitialConfig = FindStateConfig(CurrentState);
-		if (InitialConfig && PatientPhysics)
-		{
-			PatientPhysics->ApplyStateConfig(InitialConfig);
-		}
-		else
-		{
-			// No config for the initial state — legacy relaxed profile.
-			ApplyPhysicalAnimProfile(EPhysicalAnimProfile::Relaxed);
-		}
+		// No config for the initial state — legacy relaxed profile.
+		ApplyPhysicalAnimProfile(EPhysicalAnimProfile::Relaxed);
 	}
 }
 
@@ -168,22 +161,19 @@ bool APatientActor::CanBeGrabbed(FName BoneName, FVector GrabLocation) const
 		return false;
 	}
 
-	// When belt is attached, disable direct patient grabbing so the nurse
-	// is forced to use the belt handles. Only neck support bones remain grabbable.
-	if (AttachedBelt)
+	// Bed preparation and bed sit-up are neck-support interactions. Never let a
+	// generic physics body silently become a grab target in these states. Once
+	// the belt is attached, the same restriction keeps the transfer belt as the
+	// only way to lift or translate the patient.
+	if (AttachedBelt ||
+		CurrentState == EPatientState::LyingDown ||
+		CurrentState == EPatientState::BeingSupported ||
+		CurrentState == EPatientState::Seated)
 	{
 		return IsNeckSupportBone(BoneName);
 	}
 
-	// PHASE: allow grabbing ANY body part that has a physics body (hands, legs,
-	// arms, spine, neck, etc.) so the player can articulate individual limbs.
-	// The pelvis is anchored, so this can't be abused to carry the whole body.
-	if (PatientMesh && PatientMesh->GetBodyInstance(BoneName) != nullptr)
-	{
-		return true;
-	}
-
-	// Fallback: check if this bone maps to any of the allowed grabbable roles.
+	// Other explicit workflows remain limited to the designer-approved roles.
 	return BoneMatchesAnyRole(BoneName, GrabbableRoles);
 }
 
@@ -231,6 +221,14 @@ UPrimitiveComponent* APatientActor::GetGrabbableComponent() const
 
 TArray<FName> APatientActor::GetGrabbableBoneNames() const
 {
+	if (AttachedBelt ||
+		CurrentState == EPatientState::LyingDown ||
+		CurrentState == EPatientState::BeingSupported ||
+		CurrentState == EPatientState::Seated)
+	{
+		return ResolveBoneNames(NeckSupportRoles);
+	}
+
 	return ResolveBoneNames(GrabbableRoles);
 }
 
@@ -553,7 +551,7 @@ bool APatientActor::BeginSeatedTransitionAt(const FTransform& SeatTarget)
 {
 	if (!SeatedTransition || SeatedTransition->IsSeatedLocked()) return false;
 	SeatedTransition->BeginSeatedBlendToTarget(SeatTarget);
-	return SeatedTransition->IsSettling();
+	return SeatedTransition->IsSettling() || SeatedTransition->IsSeatedLocked();
 }
 
 // ============================================================

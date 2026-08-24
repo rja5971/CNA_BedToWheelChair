@@ -92,7 +92,7 @@ void USeatedTransitionComponent::BeginSeatedSettle()
 
 void USeatedTransitionComponent::BeginSeatedBlendToTarget(const FTransform& SeatTarget)
 {
-	StartBlend(&SeatTarget);
+	SnapToAnimationAtTarget(SeatTarget);
 }
 
 void USeatedTransitionComponent::MarkSeated()
@@ -159,6 +159,53 @@ void USeatedTransitionComponent::StartBlend(const FTransform* SeatTarget)
 		*SeatedAnimation->GetName(), BlendDuration, bHasSeatTarget ? TEXT(" with seat alignment") : TEXT(""));
 }
 
+void USeatedTransitionComponent::SnapToAnimationAtTarget(const FTransform& SeatTarget)
+{
+	if (!Mesh || !PhysicsComp || bSeatedLocked) return;
+	if (!SeatedAnimation)
+	{
+		UE_LOG(LogTemp, Error, TEXT("SeatedTransition: No SeatedAnimation is assigned."));
+		return;
+	}
+
+	USkeletalMesh* SkeletalMeshAsset = Mesh->GetSkeletalMeshAsset();
+	if (!SkeletalMeshAsset || SeatedAnimation->GetSkeleton() != SkeletalMeshAsset->GetSkeleton())
+	{
+		UE_LOG(LogTemp, Error, TEXT("SeatedTransition: Animation '%s' does not use patient skeleton '%s'. Retarget it before seating."),
+			*GetNameSafe(SeatedAnimation), *GetNameSafe(SkeletalMeshAsset ? SkeletalMeshAsset->GetSkeleton() : nullptr));
+		return;
+	}
+
+	bBlending = false;
+	bHasSeatTarget = true;
+	TargetSeatTransform = SeatTarget;
+	BlendElapsed = 0.0f;
+	SetComponentTickEnabled(false);
+
+	// The final belt release is an explicit handoff. Remove every held/pivot
+	// constraint, install the seated animation, and give it complete ownership
+	// in this frame instead of allowing the former ragdoll pose to blend.
+	PhysicsComp->ClearHeldPose();
+	Mesh->VisibilityBasedAnimTickOption = EVisibilityBasedAnimTickOption::AlwaysTickPoseAndRefreshBones;
+	Mesh->SetAnimationMode(EAnimationMode::AnimationSingleNode);
+	Mesh->SetAnimation(SeatedAnimation);
+	Mesh->SetPlayRate(1.0f);
+	Mesh->Play(bLoopSeatedAnimation);
+	Mesh->SetPosition(0.0f);
+	ApplyPhysicsBlend(1.0f, 1.0f);
+	Mesh->SetAllBodiesSimulatePhysics(false);
+	Mesh->SetSimulatePhysics(false);
+	Mesh->TickAnimation(0.0f, false);
+	Mesh->RefreshBoneTransforms();
+
+	AlignAnimationToSeatTarget();
+	bSeatedLocked = true;
+
+	UE_LOG(LogTemp, Log, TEXT("SeatedTransition: Snapped directly to '%s' at the chair seat target."),
+		*SeatedAnimation->GetName());
+	OnSeatedReached.Broadcast();
+}
+
 void USeatedTransitionComponent::ApplyPhysicsBlend(float TorsoAlpha, float LimbAlpha)
 {
 	const FName Pelvis = ResolveBoneName(EPatientBoneRole::Pelvis);
@@ -205,16 +252,15 @@ void USeatedTransitionComponent::AlignAnimationToSeatTarget()
 
 	const FRotator CurrentRotation = Mesh->GetComponentRotation();
 	const float DesiredYawDelta = FMath::FindDeltaAngleDegrees(CurrentRotation.Yaw, TargetSeatTransform.Rotator().Yaw);
-	const float AppliedYawDelta = FMath::Clamp(DesiredYawDelta, -MaxSeatYawCorrection, MaxSeatYawCorrection);
-	Mesh->SetWorldRotation(FRotator(CurrentRotation.Pitch, CurrentRotation.Yaw + AppliedYawDelta, CurrentRotation.Roll));
+	Mesh->SetWorldRotation(FRotator(CurrentRotation.Pitch, TargetSeatTransform.Rotator().Yaw, CurrentRotation.Roll),
+		false, nullptr, ETeleportType::TeleportPhysics);
 	Mesh->RefreshBoneTransforms();
 
-	FVector Correction = TargetSeatTransform.GetLocation() - Mesh->GetSocketLocation(Pelvis);
-	Correction = Correction.GetClampedToMaxSize(MaxSeatPositionCorrection);
+	const FVector Correction = TargetSeatTransform.GetLocation() - Mesh->GetSocketLocation(Pelvis);
 	Mesh->AddWorldOffset(Correction, false, nullptr, ETeleportType::TeleportPhysics);
 	Mesh->RefreshBoneTransforms();
-	UE_LOG(LogTemp, Log, TEXT("SeatedTransition: Seat correction %.1f cm, yaw correction %.1f degrees."),
-		Correction.Size(), AppliedYawDelta);
+	UE_LOG(LogTemp, Log, TEXT("SeatedTransition: Exact seat correction %.1f cm, yaw correction %.1f degrees."),
+		Correction.Size(), DesiredYawDelta);
 }
 
 void USeatedTransitionComponent::CancelBlend()
