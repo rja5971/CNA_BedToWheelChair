@@ -75,6 +75,12 @@ float AWheelchairActor::GetAcceptanceRadius() const
 	return AcceptanceRadius_Config;
 }
 
+bool AWheelchairActor::IsLocationInSeatArea(const FVector& WorldLocation, float ExtraTolerance) const
+{
+	if (!SeatZone) return false;
+	return SeatZone->Bounds.GetBox().ExpandBy(FMath::Max(0.0f, ExtraTolerance)).IsInsideOrOn(WorldLocation);
+}
+
 void AWheelchairActor::OnTransferBegin(AActor* Patient)
 {
 	// Could play wheelchair creak sound, lock wheels tighter, etc.

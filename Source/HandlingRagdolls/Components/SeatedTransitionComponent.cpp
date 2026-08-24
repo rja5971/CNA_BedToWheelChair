@@ -2,13 +2,24 @@
 
 #include "SeatedTransitionComponent.h"
 #include "PatientPhysicsComponent.h"
+#include "Animation/AnimSequence.h"
+#include "Animation/Skeleton.h"
 #include "Components/SkeletalMeshComponent.h"
-#include "PhysicsEngine/BodyInstance.h"
+#include "Engine/SkeletalMesh.h"
+#include "UObject/ConstructorHelpers.h"
 
 USeatedTransitionComponent::USeatedTransitionComponent()
 {
 	PrimaryComponentTick.bCanEverTick = true;
 	PrimaryComponentTick.bStartWithTickEnabled = false;
+	PrimaryComponentTick.TickGroup = TG_PostPhysics;
+
+	static ConstructorHelpers::FObjectFinder<UAnimSequence> DefaultSeatedAnimation(
+		TEXT("/Game/Animations/AN_Patient_Sitting.AN_Patient_Sitting"));
+	if (DefaultSeatedAnimation.Succeeded())
+	{
+		SeatedAnimation = DefaultSeatedAnimation.Object;
+	}
 }
 
 void USeatedTransitionComponent::BeginPlay()
@@ -27,216 +38,201 @@ void USeatedTransitionComponent::Initialize(USkeletalMeshComponent* InMesh, UPat
 void USeatedTransitionComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+	if (!bBlending || !Mesh) return;
 
-	if (!bSettling) return;
+	BlendElapsed += DeltaTime;
+	const float LinearAlpha = FMath::Clamp(BlendElapsed / FMath::Max(BlendDuration, 0.1f), 0.0f, 1.0f);
+	const float TorsoAlpha = LinearAlpha * LinearAlpha * (3.0f - 2.0f * LinearAlpha);
+	const float LimbLinearAlpha = FMath::Clamp(
+		(LinearAlpha - LimbBlendDelay) / FMath::Max(1.0f - LimbBlendDelay, KINDA_SMALL_NUMBER), 0.0f, 1.0f);
+	const float LimbAlpha = LimbLinearAlpha * LimbLinearAlpha * (3.0f - 2.0f * LimbLinearAlpha);
 
-	SettleElapsed += DeltaTime;
-
-	// SAFETY: If the torso has fallen back (patient dropped/released), cancel the settle.
-	// The body isn't actually upright anymore — don't freeze it in a lying position.
-	float CurrentAngle = GetTorsoUprightAngleDeg();
-	if (CurrentAngle > SitUprightAngleThreshold + 15.0f) // 15° grace margin
+	if (LinearAlpha < 0.35f && GetTorsoUprightAngleDeg() > SitUprightAngleThreshold + CancelAngleGrace)
 	{
-		UE_LOG(LogTemp, Log, TEXT("SeatedTransition: Torso fell back to %.1f° — cancelling settle."), CurrentAngle);
-		CancelSettle();
+		UE_LOG(LogTemp, Log, TEXT("SeatedTransition: Patient fell away before the handoff; cancelling."));
+		CancelBlend();
 		return;
 	}
 
-	// Check if all bodies have low angular velocity (body is settling)
-	float MaxAngVel = GetMaxBodyAngularVelocity();
-
-	if (MaxAngVel <= SettleVelocityThreshold)
+	ApplyPhysicsBlend(TorsoAlpha, LimbAlpha);
+	if (LinearAlpha >= 1.0f)
 	{
-		StableTime += DeltaTime;
-	}
-	else
-	{
-		// Still moving — reset stable counter
-		StableTime = 0.0f;
-	}
-
-	// Freeze conditions:
-	// 1. Body has been stable for MinStableTime (natural settle)
-	// 2. OR max time exceeded (force freeze to prevent infinite waiting)
-	if (StableTime >= MinStableTime || SettleElapsed >= MaxSettleTime)
-	{
-		// Final check: only freeze if the torso is still reasonably upright
-		if (CurrentAngle <= SitUprightAngleThreshold + 10.0f)
-		{
-			if (SettleElapsed >= MaxSettleTime)
-			{
-				UE_LOG(LogTemp, Log, TEXT("SeatedTransition: Max settle time (%.1fs) reached — freezing at %.1f°."), MaxSettleTime, CurrentAngle);
-			}
-			else
-			{
-				UE_LOG(LogTemp, Log, TEXT("SeatedTransition: Body settled naturally in %.2fs (angle: %.1f°, max ang vel: %.1f deg/s)"),
-					SettleElapsed, CurrentAngle, MaxAngVel);
-			}
-			FreezeInPlace();
-		}
-		else
-		{
-			// Torso not upright enough even after max time — cancel
-			UE_LOG(LogTemp, Log, TEXT("SeatedTransition: Body not upright (%.1f°) after max time — cancelling."), CurrentAngle);
-			CancelSettle();
-		}
+		CompleteBlend();
 	}
 }
-
-// ============================================================
-// Sit Detection
-// ============================================================
 
 float USeatedTransitionComponent::GetTorsoUprightAngleDeg() const
 {
 	if (!Mesh) return 90.0f;
-
-	FName PelvisBone = ResolveBoneName(EPatientBoneRole::Pelvis);
-	FName ChestBone = ResolveBoneName(EPatientBoneRole::Spine05);
+	const FName PelvisBone = ResolveBoneName(EPatientBoneRole::Pelvis);
+	const FName ChestBone = ResolveBoneName(EPatientBoneRole::Spine05);
 	if (PelvisBone.IsNone() || ChestBone.IsNone()) return 90.0f;
 
-	const FVector PelvisLoc = Mesh->GetBoneLocation(PelvisBone);
-	const FVector ChestLoc = Mesh->GetBoneLocation(ChestBone);
-
-	FVector TorsoDir = ChestLoc - PelvisLoc;
-	if (!TorsoDir.Normalize())
-	{
-		return 90.0f;
-	}
-
+	FVector TorsoDir = Mesh->GetBoneLocation(ChestBone) - Mesh->GetBoneLocation(PelvisBone);
+	if (!TorsoDir.Normalize()) return 90.0f;
 	const float Dot = FMath::Clamp(FVector::DotProduct(TorsoDir, FVector::UpVector), -1.0f, 1.0f);
 	return FMath::RadiansToDegrees(FMath::Acos(Dot));
 }
 
 bool USeatedTransitionComponent::CheckSitThreshold(float TorsoAngle)
 {
-	if (bSeatedLocked || bSettling) return false;
-
-	// Pure detection. The actual freeze is done by the Seated state config
-	// (applied via APatientActor::SetPatientState → ApplyStateConfig), which
-	// holds the player-folded pose. We do NOT apply competing motors here.
+	if (bSeatedLocked || bBlending) return false;
 	if (TorsoAngle <= SitUprightAngleThreshold)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("[SEAT] Threshold CROSSED: angle=%.1f <= threshold=%.1f — triggering Seated"),
-			TorsoAngle, SitUprightAngleThreshold);
+		UE_LOG(LogTemp, Log, TEXT("SeatedTransition: Upright threshold crossed at %.1f degrees."), TorsoAngle);
 		return true;
-	}
-	// Log occasionally so we can see the angle approaching the threshold
-	static float LastLoggedAngle = 999.0f;
-	if (FMath::Abs(TorsoAngle - LastLoggedAngle) > 5.0f)
-	{
-		UE_LOG(LogTemp, Warning, TEXT("[SEAT] Folding: angle=%.1f (threshold=%.1f)"), TorsoAngle, SitUprightAngleThreshold);
-		LastLoggedAngle = TorsoAngle;
 	}
 	return false;
 }
 
-// ============================================================
-// Seated Settle (physics-driven)
-// ============================================================
-
 void USeatedTransitionComponent::BeginSeatedSettle()
 {
-	if (!Mesh || !PhysicsComp) return;
-	if (bSettling || bSeatedLocked) return;
-
-	// Switch to the Seated physical animation profile — strong motors that
-	// drive the body toward an upright posture. The physics system will
-	// naturally settle the body from its current folded position (~45°)
-	// to fully upright over the next few frames/seconds.
-	PhysicsComp->ApplyProfile(EPhysicalAnimProfile::Seated);
-
-	// Start monitoring for stabilization
-	bSettling = true;
-	SettleElapsed = 0.0f;
-	StableTime = 0.0f;
-
-	// Enable tick to monitor velocity
-	SetComponentTickEnabled(true);
-
-	UE_LOG(LogTemp, Log, TEXT("SeatedTransition: Seated profile applied — waiting for body to settle (threshold: %.1f deg/s, max wait: %.1fs)"),
-		SettleVelocityThreshold, MaxSettleTime);
+	StartBlend(nullptr);
 }
 
-// ============================================================
-// Freeze
-// ============================================================
+void USeatedTransitionComponent::BeginSeatedBlendToTarget(const FTransform& SeatTarget)
+{
+	StartBlend(&SeatTarget);
+}
 
-void USeatedTransitionComponent::FreezeInPlace()
+void USeatedTransitionComponent::MarkSeated()
+{
+	bSeatedLocked = true;
+	bBlending = false;
+	SetComponentTickEnabled(false);
+}
+
+void USeatedTransitionComponent::ResetTransition()
+{
+	bSeatedLocked = false;
+	bBlending = false;
+	bHasSeatTarget = false;
+	BlendElapsed = 0.0f;
+	SetComponentTickEnabled(false);
+	if (Mesh)
+	{
+		Mesh->SetAllBodiesPhysicsBlendWeight(1.0f, false);
+	}
+}
+
+void USeatedTransitionComponent::StartBlend(const FTransform* SeatTarget)
+{
+	if (!Mesh || !PhysicsComp || bBlending || bSeatedLocked) return;
+	if (!SeatedAnimation)
+	{
+		UE_LOG(LogTemp, Error, TEXT("SeatedTransition: No SeatedAnimation is assigned."));
+		return;
+	}
+
+	USkeletalMesh* SkeletalMeshAsset = Mesh->GetSkeletalMeshAsset();
+	if (!SkeletalMeshAsset || SeatedAnimation->GetSkeleton() != SkeletalMeshAsset->GetSkeleton())
+	{
+		UE_LOG(LogTemp, Error, TEXT("SeatedTransition: Animation '%s' does not use patient skeleton '%s'. Retarget it before seating."),
+			*GetNameSafe(SeatedAnimation), *GetNameSafe(SkeletalMeshAsset ? SkeletalMeshAsset->GetSkeleton() : nullptr));
+		return;
+	}
+
+	bHasSeatTarget = SeatTarget != nullptr;
+	if (SeatTarget) TargetSeatTransform = *SeatTarget;
+
+	PhysicsComp->ClearHeldPose();
+	Mesh->VisibilityBasedAnimTickOption = EVisibilityBasedAnimTickOption::AlwaysTickPoseAndRefreshBones;
+	Mesh->SetAnimationMode(EAnimationMode::AnimationSingleNode);
+	Mesh->SetAnimation(SeatedAnimation);
+	Mesh->SetPosition(0.0f);
+	Mesh->SetPlayRate(1.0f);
+	Mesh->Play(bLoopSeatedAnimation);
+
+	PhysicsComp->ApplyProfile(EPhysicalAnimProfile::Seated);
+	ApplyPhysicsBlend(0.0f, 0.0f);
+	if (bHasSeatTarget)
+	{
+		// Release-driven chair seating snaps the pelvis onto the selected chair
+		// immediately; the body then blends gradually from physics to animation.
+		AlignAnimationToSeatTarget();
+	}
+	bBlending = true;
+	BlendElapsed = 0.0f;
+	SetComponentTickEnabled(true);
+
+	UE_LOG(LogTemp, Log, TEXT("SeatedTransition: Blending physics to '%s' over %.2f seconds%s."),
+		*SeatedAnimation->GetName(), BlendDuration, bHasSeatTarget ? TEXT(" with seat alignment") : TEXT(""));
+}
+
+void USeatedTransitionComponent::ApplyPhysicsBlend(float TorsoAlpha, float LimbAlpha)
+{
+	const FName Pelvis = ResolveBoneName(EPatientBoneRole::Pelvis);
+	if (Pelvis.IsNone())
+	{
+		Mesh->SetAllBodiesPhysicsBlendWeight(1.0f - TorsoAlpha, false);
+		return;
+	}
+
+	Mesh->SetAllBodiesBelowPhysicsBlendWeight(Pelvis, 1.0f - TorsoAlpha, false, true);
+	static const EPatientBoneRole DelayedRoots[] = {
+		EPatientBoneRole::ThighLeft, EPatientBoneRole::ThighRight,
+		EPatientBoneRole::ClavicleLeft, EPatientBoneRole::ClavicleRight,
+		EPatientBoneRole::Neck01
+	};
+	for (const EPatientBoneRole Role : DelayedRoots)
+	{
+		const FName Bone = ResolveBoneName(Role);
+		if (!Bone.IsNone())
+		{
+			Mesh->SetAllBodiesBelowPhysicsBlendWeight(Bone, 1.0f - LimbAlpha, false, true);
+		}
+	}
+}
+
+void USeatedTransitionComponent::CompleteBlend()
 {
 	if (!Mesh) return;
-
-	bSettling = false;
-
-	// We DO NOT manually turn off SimulatePhysics here!
-	// Doing so instantly snaps the skeletal mesh back to its rest pose (sleeping on the bed)
-	// before the PatientPhysicsComponent has a chance to capture the upright transform.
-	// Instead, we just broadcast the event, and ApplyStateConfig will correctly handle 
-	// the physics states to lock them in place.
+	ApplyPhysicsBlend(1.0f, 1.0f);
+	Mesh->SetAllBodiesSimulatePhysics(false);
+	Mesh->SetSimulatePhysics(false);
+	Mesh->RefreshBoneTransforms();
+	bBlending = false;
 	bSeatedLocked = true;
-
-	// Disable tick — done
 	SetComponentTickEnabled(false);
-
-	UE_LOG(LogTemp, Log, TEXT("SeatedTransition: Body frozen in seated position."));
-
-	// Broadcast so the owning actor can react (state transition, etc.)
+	UE_LOG(LogTemp, Log, TEXT("SeatedTransition: Animation now fully controls the seated patient."));
 	OnSeatedReached.Broadcast();
 }
 
-void USeatedTransitionComponent::CancelSettle()
+void USeatedTransitionComponent::AlignAnimationToSeatTarget()
 {
-	bSettling = false;
-	SettleElapsed = 0.0f;
-	StableTime = 0.0f;
+	const FName Pelvis = ResolveBoneName(EPatientBoneRole::Pelvis);
+	if (!Mesh || Pelvis.IsNone()) return;
 
-	// Disable tick
-	SetComponentTickEnabled(false);
+	const FRotator CurrentRotation = Mesh->GetComponentRotation();
+	const float DesiredYawDelta = FMath::FindDeltaAngleDegrees(CurrentRotation.Yaw, TargetSeatTransform.Rotator().Yaw);
+	const float AppliedYawDelta = FMath::Clamp(DesiredYawDelta, -MaxSeatYawCorrection, MaxSeatYawCorrection);
+	Mesh->SetWorldRotation(FRotator(CurrentRotation.Pitch, CurrentRotation.Yaw + AppliedYawDelta, CurrentRotation.Roll));
+	Mesh->RefreshBoneTransforms();
 
-	// Revert the profile back to Relaxed — the patient isn't seated after all.
-	if (PhysicsComp)
-	{
-		PhysicsComp->ApplyProfile(EPhysicalAnimProfile::Relaxed);
-	}
-
-	UE_LOG(LogTemp, Log, TEXT("SeatedTransition: Settle cancelled — reverting to Relaxed profile."));
-
-	// Broadcast cancel so the owning actor can revert state
-	OnSettleCancelled.Broadcast();
+	FVector Correction = TargetSeatTransform.GetLocation() - Mesh->GetSocketLocation(Pelvis);
+	Correction = Correction.GetClampedToMaxSize(MaxSeatPositionCorrection);
+	Mesh->AddWorldOffset(Correction, false, nullptr, ETeleportType::TeleportPhysics);
+	Mesh->RefreshBoneTransforms();
+	UE_LOG(LogTemp, Log, TEXT("SeatedTransition: Seat correction %.1f cm, yaw correction %.1f degrees."),
+		Correction.Size(), AppliedYawDelta);
 }
 
-// ============================================================
-// Helpers
-// ============================================================
-
-float USeatedTransitionComponent::GetMaxBodyAngularVelocity() const
+void USeatedTransitionComponent::CancelBlend()
 {
-	if (!Mesh) return 0.0f;
-
-	float MaxAngVel = 0.0f;
-
-	TArray<FName> AllBoneNames;
-	Mesh->GetBoneNames(AllBoneNames);
-
-	for (const FName& BoneName : AllBoneNames)
+	bBlending = false;
+	bHasSeatTarget = false;
+	BlendElapsed = 0.0f;
+	SetComponentTickEnabled(false);
+	ApplyPhysicsBlend(0.0f, 0.0f);
+	if (PhysicsComp)
 	{
-		FBodyInstance* BodyInst = Mesh->GetBodyInstance(BoneName);
-		if (BodyInst && BodyInst->IsInstanceSimulatingPhysics())
-		{
-			FVector AngVel = BodyInst->GetUnrealWorldAngularVelocityInRadians();
-			float AngVelDeg = FMath::RadiansToDegrees(AngVel.Size());
-			MaxAngVel = FMath::Max(MaxAngVel, AngVelDeg);
-		}
+		PhysicsComp->ApplyRestPose();
+		PhysicsComp->ApplyProfile(EPhysicalAnimProfile::Relaxed);
 	}
-
-	return MaxAngVel;
+	OnSettleCancelled.Broadcast();
 }
 
 FName USeatedTransitionComponent::ResolveBoneName(EPatientBoneRole BoneRole) const
 {
-	if (BoneMapping)
-	{
-		return BoneMapping->GetBoneName(BoneRole);
-	}
-	return NAME_None;
+	return BoneMapping ? BoneMapping->GetBoneName(BoneRole) : NAME_None;
 }

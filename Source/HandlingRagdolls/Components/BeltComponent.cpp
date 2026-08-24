@@ -127,6 +127,7 @@ void UBeltComponent::OnHandleGrabbed(UGrabComponent* Grabber, FName HandleName, 
 {
 	if (!Grabber) return;
 
+	bFinalHandleReleasePending = false;
 	ActiveGrabbers.Add(Grabber, HandleName);
 	
 	// Broadcast with the grabber's owning actor (safe for dynamic delegate)
@@ -156,6 +157,11 @@ void UBeltComponent::OnHandleReleased(UGrabComponent* Grabber)
 {
 	if (!Grabber) return;
 	ActiveGrabbers.Remove(Grabber);
+	if (ActiveGrabbers.Num() == 0)
+	{
+		bFinalHandleReleasePending = true;
+		UE_LOG(LogTemp, Log, TEXT("BeltComponent: Final handle released; seating request armed."));
+	}
 
 	// Check for two-hand grab end
 	if (ActiveGrabbers.Num() < 2 && bWasTwoHandGrab)
@@ -214,6 +220,13 @@ bool UBeltComponent::GetTwoHandGrabPositions(FVector& OutLeftPos, FVector& OutRi
 
 	return LeftGrabber && LeftGrabber->GetTraceOrigin()
 		&& RightGrabber && RightGrabber->GetTraceOrigin();
+}
+
+bool UBeltComponent::ConsumeFinalHandleRelease()
+{
+	const bool bWasPending = bFinalHandleReleasePending;
+	bFinalHandleReleasePending = false;
+	return bWasPending;
 }
 
 float UBeltComponent::GetTwoHandYawDegrees() const

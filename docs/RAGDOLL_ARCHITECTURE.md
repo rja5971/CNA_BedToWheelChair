@@ -53,7 +53,7 @@ The patient was refactored from a 700-line god class into focused components (SR
 |-----------|---------------|
 | `APatientActor` | Thin coordinator; implements interfaces; state routing; spine stress |
 | `UPatientPhysicsComponent` | Physics mode, profiles, mass, damping, `ApplyStateConfig()` |
-| `USeatedTransitionComponent` | Sit detection, physics-driven settle, freeze, cancel-on-fallback |
+| `USeatedTransitionComponent` | Bed sit detection plus targeted physics-to-animation wheelchair handoff |
 | `UCooperationRampComponent` | Progressive muscle engagement during fold-up (curve-driven) |
 | `UGrabComponent` | VR hand physics-handle grab (via IGrabbable) |
 | `USpineMonitorComponent` | Observes ISpineMonitorable, fires stress events |
@@ -61,7 +61,9 @@ The patient was refactored from a 700-line god class into focused components (SR
 **Data-driven state system:** `UPatientStateConfig` assets define per-state bone behavior.
 Each config lists bone GROUPS (Pelvis, Spine, Neck, Head, Arms, Legs) with a behavior
 (Anchored / Stiff / Free). The state machine drives transitions; the config drives physics.
-No animations — the simulation is pure physics.
+Bed positioning remains physics-driven. Once the patient is released inside a
+wheelchair `SeatZone`, the pelvis aligns to that chair's `SeatTarget` and the mesh
+blends into `/Game/Animations/AN_Patient_Sitting` over the configured duration.
 
 **State machine decoupling:** `UTransferStateMachine` holds `TScriptInterface<IIPatient>`,
 not a concrete `APatientActor*`. State sequence is a data-driven `TArray<ETransferState>`.
@@ -172,8 +174,10 @@ not a concrete `APatientActor*`. State sequence is a data-driven `TArray<ETransf
   grabs via an internal `UPhysicsHandleComponent`, tracks the hand each tick.
 - **`UBeltComponent` + `ABeltActor`** — belt attaches to an `IBeltAttachable` via a
   `UPhysicsConstraintComponent`; once attached, `BeltHandle_L/_R` become grab points.
-- **`AWheelchairActor`** — `ITransferTarget`; brakes must be locked; accepts the
-  patient when the pelvis is within the acceptance radius at low velocity.
+- **`AWheelchairActor`** — `ITransferTarget`; each instance owns an independent
+  `SeatZone` and `SeatTarget`. The nearest chair is selected dynamically. Releasing
+  the final belt handle inside its seat zone bypasses the velocity gate and starts
+  the targeted animation handoff immediately.
 - **`UTransferStateMachine`** — orchestrates the 6-state flow; each state is a
   `UTransferTaskState` subclass with its own entry/tick/transition/failure logic.
 - **`UScoringComponent`** — accumulates penalties (spine stress, dropping too fast,

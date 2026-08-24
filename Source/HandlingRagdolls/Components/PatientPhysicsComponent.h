@@ -13,6 +13,7 @@
 class USkeletalMeshComponent;
 class USpineConstraintConfig;
 class UAnimSequence;
+class UPhysicsConstraintComponent;
 
 /**
  * Patient Physics Component — owns the physical animation lifecycle.
@@ -201,12 +202,15 @@ private:
 	float DiagElapsed = 0.0f;
 	int32 DiagFrame = 0;
 
-	// --- Pose hold (freeze anchored bones at a captured upright transform) ---
-	// Kinematic bodies snap to the animation pose, so to hold the player-folded
-	// pose we capture the anchored bones' world transforms and re-assert them
-	// every frame via SetBodyTransform.
+	// --- Pose hold (freeze anchored bones at their captured world transforms) ---
+	// The pelvis becomes kinematic when Anchored. Other anchored bodies remain
+	// simulated and use world constraints so they render the captured physical pose.
+	// PostPhysics reassertion provides a final safeguard against drift.
 	bool bHoldingPose = false;
 	TMap<FName, FTransform> HeldBoneTransforms;
+
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UPhysicsConstraintComponent>> AnchorConstraints;
 
 	// --- Pivot (position-pinned, yaw-free) ---
 	// Pivot bones hold XYZ position + pitch/roll but allow yaw to be driven.
@@ -221,4 +225,7 @@ private:
 
 	/** Resolve a bone group to its subtree root bone name (via BoneMapping) */
 	FName ResolveGroupRoot(EPatientBoneGroup Group) const;
+
+	/** Destroy temporary world constraints created for Anchored behaviors. */
+	void ClearAnchorConstraints();
 };

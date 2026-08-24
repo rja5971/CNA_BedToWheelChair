@@ -6,6 +6,8 @@
 #include "../../Interfaces/ISpineMonitorable.h"
 #include "../../Components/BeltComponent.h"
 #include "../../Components/ScoringComponent.h"
+#include "../../Transfer/WheelchairActor.h"
+#include "EngineUtils.h"
 
 void UBeltLiftState::EnterState(UTransferStateMachine* StateMachine)
 {
@@ -43,8 +45,25 @@ void UBeltLiftState::TickState(float DeltaTime)
 	}
 	else if (!bBeltIsBeingGrabbed && bWasBeingGrabbed && !bLiftComplete)
 	{
-		// Let go before lift complete! Re-anchor them (e.g. BeltAttached).
-		Patient->SetPatientState(EPatientState::BeltAttached);
+		// Releasing inside any chair is an intentional seating handoff, even when
+		// the vertical lift-height requirement was not reached.
+		const FVector PelvisPos = Patient->GetPelvisLocation();
+		for (TActorIterator<AWheelchairActor> It(OwningStateMachine->GetWorld()); It; ++It)
+		{
+			if (It->IsLocationInSeatArea(PelvisPos))
+			{
+				bLiftComplete = true;
+				UE_LOG(LogTemp, Log, TEXT("BeltLift: Final handle released inside %s; advancing to seating."),
+					*It->GetName());
+				break;
+			}
+		}
+
+		if (!bLiftComplete)
+		{
+			// Let go away from a chair before lift completion: re-anchor safely.
+			Patient->SetPatientState(EPatientState::BeltAttached);
+		}
 	}
 
 	if (bBeltIsBeingGrabbed)
@@ -56,6 +75,26 @@ void UBeltLiftState::TickState(float DeltaTime)
 		if (CurrentLiftHeight >= RequiredLiftHeight)
 		{
 			bLiftComplete = true;
+		}
+
+		// Reaching any wheelchair is also a valid completion of the lift phase.
+		// This prevents the workflow from remaining stuck in BeingLifted when the
+		// nurse performs a shorter but otherwise valid bed-to-chair transfer.
+		if (!bLiftComplete)
+		{
+			for (TActorIterator<AWheelchairActor> It(OwningStateMachine->GetWorld()); It; ++It)
+			{
+				AWheelchairActor* Chair = *It;
+				const float SeatDistance = FVector::Dist(
+					PelvisPos, Chair->GetTargetSeatTransform().GetLocation());
+				if (SeatDistance <= Chair->GetAcceptanceRadius())
+				{
+					bLiftComplete = true;
+					UE_LOG(LogTemp, Log, TEXT("BeltLift: Patient reached %s at %.1f cm; advancing to wheelchair transfer."),
+						*Chair->GetName(), SeatDistance);
+					break;
+				}
+			}
 		}
 
 		// Bonus for two-hand lift (proper technique)

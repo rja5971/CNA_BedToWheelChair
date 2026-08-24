@@ -59,6 +59,10 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Wheelchair")
 	bool IsOccupied() const { return bIsOccupied; }
 
+	/** Whether a world-space point is inside the chair's seat area. */
+	UFUNCTION(BlueprintCallable, Category = "Wheelchair")
+	bool IsLocationInSeatArea(const FVector& WorldLocation, float ExtraTolerance = 12.0f) const;
+
 	// ============================================================
 	// Events
 	// ============================================================

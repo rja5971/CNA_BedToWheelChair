@@ -7,23 +7,14 @@
 #include "../Patient/PatientBoneMapping.h"
 #include "SeatedTransitionComponent.generated.h"
 
+class UAnimSequence;
 class USkeletalMeshComponent;
 class UPatientPhysicsComponent;
 
-/** Broadcast when the body has settled into the seated position and is frozen */
+/** Broadcast when the physics-to-animation handoff has completed. */
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnSeatedReached);
 
-/**
- * Seated Transition Component — Pure Physics Approach
- *
- * When the patient's torso crosses the sit threshold, this component switches
- * the physical animation profile to "Seated" (strong motors driving upright).
- * The physics system naturally settles the body into a seated posture.
- * Once the body stabilizes (angular velocity drops below threshold), all bodies
- * are frozen in place for the next step (belt attachment).
- *
- * NO ANIMATIONS NEEDED. The physics motors do all the work.
- */
+/** Smoothly hands the patient from a simulated ragdoll to a seated animation. */
 UCLASS(ClassGroup = (PatientCare), meta = (BlueprintSpawnableComponent))
 class HANDLINGRAGDOLLS_API USeatedTransitionComponent : public UActorComponent
 {
@@ -38,129 +29,81 @@ protected:
 public:
 	virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
 
-	// ============================================================
-	// Initialization
-	// ============================================================
-
 	void Initialize(USkeletalMeshComponent* InMesh, UPatientBoneMapping* InBoneMapping,
 		UPatientPhysicsComponent* InPhysics);
 
-	// ============================================================
-	// Sit Detection
-	// ============================================================
-
-	/**
-	 * Angle of the torso from vertical, in degrees (lying ≈ 90°, upright ≈ 0°).
-	 */
 	UFUNCTION(BlueprintCallable, Category = "Seated Transition")
 	float GetTorsoUprightAngleDeg() const;
 
-	/**
-	 * Called by the owning actor's Tick. Checks whether the torso angle has passed
-	 * the sit threshold and triggers the seated settle if so.
-	 * Returns true if the threshold was crossed this frame.
-	 */
 	bool CheckSitThreshold(float TorsoAngle);
 
-	// ============================================================
-	// Seated Settle (physics-driven)
-	// ============================================================
-
-	/** Begin the physics-driven settle into seated position */
+	/** Start a blend at the patient's current world position. */
 	UFUNCTION(BlueprintCallable, Category = "Seated Transition")
 	void BeginSeatedSettle();
 
-	/** Mark the patient as seated (stops sit-detection). Used when the state config
-	 *  freezes the pose directly, so no motor-settle is needed. */
+	/** Start a blend and align the final animated pelvis to a chair's seat target. */
 	UFUNCTION(BlueprintCallable, Category = "Seated Transition")
-	void MarkSeated() { bSeatedLocked = true; bSettling = false; SetComponentTickEnabled(false); }
+	void BeginSeatedBlendToTarget(const FTransform& SeatTarget);
 
-	// ============================================================
-	// State Accessors
-	// ============================================================
+	UFUNCTION(BlueprintCallable, Category = "Seated Transition")
+	void MarkSeated();
 
-	/** Whether the patient has locked into the seated pose */
+	/** Re-arm after the patient leaves a seated state. */
+	UFUNCTION(BlueprintCallable, Category = "Seated Transition")
+	void ResetTransition();
+
 	UFUNCTION(BlueprintCallable, Category = "Seated Transition")
 	bool IsSeatedLocked() const { return bSeatedLocked; }
 
-	/** Whether we are currently settling into seated (physics motors active) */
 	UFUNCTION(BlueprintCallable, Category = "Seated Transition")
-	bool IsSettling() const { return bSettling; }
+	bool IsSettling() const { return bBlending; }
 
-	// Backward compat alias
-	bool IsBlendingToSeated() const { return bSettling; }
+	bool IsBlendingToSeated() const { return bBlending; }
 
-	// ============================================================
-	// Events
-	// ============================================================
-
-	/** Broadcast when the body has stabilized and is frozen in the seated position */
 	UPROPERTY(BlueprintAssignable, Category = "Seated Transition|Events")
 	FOnSeatedReached OnSeatedReached;
 
-
-	/** Broadcast when the settle was cancelled (patient fell back before stabilizing) */
 	UPROPERTY(BlueprintAssignable, Category = "Seated Transition|Events")
 	FOnSeatedReached OnSettleCancelled;
 
-	// ============================================================
-	// Configuration
-	// ============================================================
+	/** The exact Sitting Idle FBX imported onto the elderly-patient skeleton. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Seated Transition|Animation")
+	TObjectPtr<UAnimSequence> SeatedAnimation;
 
-	/**
-	 * How upright the torso must become (degrees from vertical) to count as "seated".
-	 * Lying flat ≈ 90°, fully upright ≈ 0°. Default 45°.
-	 */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Seated Transition|Config", meta = (ClampMin = "0.0", ClampMax = "90.0"))
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Seated Transition|Animation", meta = (ClampMin = "0.1"))
+	float BlendDuration = 1.5f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Seated Transition|Animation")
+	bool bLoopSeatedAnimation = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Seated Transition|Animation", meta = (ClampMin = "0.0", ClampMax = "0.75"))
+	float LimbBlendDelay = 0.18f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Seated Transition|Detection", meta = (ClampMin = "0.0", ClampMax = "90.0"))
 	float SitUprightAngleThreshold = 45.0f;
 
-	/**
-	 * Maximum angular velocity (deg/s) across all bodies to consider "settled".
-	 * When all bodies drop below this, the body is frozen.
-	 */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Seated Transition|Config", meta = (ClampMin = "0.0"))
-	float SettleVelocityThreshold = 15.0f;
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Seated Transition|Detection", meta = (ClampMin = "0.0", ClampMax = "45.0"))
+	float CancelAngleGrace = 20.0f;
 
-	/**
-	 * Maximum time (seconds) to wait for settling. If the body hasn't stabilized
-	 * by this time, force-freeze anyway. Prevents infinite waiting.
-	 */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Seated Transition|Config", meta = (ClampMin = "0.5"))
-	float MaxSettleTime = 3.0f;
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Seated Transition|Alignment", meta = (ClampMin = "0.0"))
+	float MaxSeatPositionCorrection = 30.0f;
 
-	/**
-	 * Minimum time (seconds) the body must be below SettleVelocityThreshold
-	 * before we consider it truly settled (prevents premature freeze on a
-	 * momentary pause during oscillation).
-	 */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Seated Transition|Config", meta = (ClampMin = "0.1"))
-	float MinStableTime = 0.4f;
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Seated Transition|Alignment", meta = (ClampMin = "0.0", ClampMax = "180.0"))
+	float MaxSeatYawCorrection = 45.0f;
 
 private:
-	/** Freeze all bodies in their current position */
-	void FreezeInPlace();
-
-	/** Cancel the settle and revert to Relaxed profile */
-	void CancelSettle();
-
-	/** Get the maximum angular velocity across all simulating bodies */
-	float GetMaxBodyAngularVelocity() const;
-
-	/** Resolve a logical role to an actual bone name via the BoneMapping asset */
+	void StartBlend(const FTransform* SeatTarget);
+	void ApplyPhysicsBlend(float TorsoAlpha, float LimbAlpha);
+	void CompleteBlend();
+	void AlignAnimationToSeatTarget();
+	void CancelBlend();
 	FName ResolveBoneName(EPatientBoneRole BoneRole) const;
 
-	// ============================================================
-	// State
-	// ============================================================
-
 	bool bSeatedLocked = false;
-	bool bSettling = false;
-	float SettleElapsed = 0.0f;
-	float StableTime = 0.0f;
-
-	// ============================================================
-	// Cached References
-	// ============================================================
+	bool bBlending = false;
+	bool bHasSeatTarget = false;
+	float BlendElapsed = 0.0f;
+	FTransform TargetSeatTransform = FTransform::Identity;
 
 	UPROPERTY()
 	TObjectPtr<USkeletalMeshComponent> Mesh;

@@ -19,7 +19,8 @@ class USpineConstraintConfig;
 class UPhysicalAnimationComponent;
 class UAnimSequence;
 class UPatientPhysicsComponent;
-class UPatientStateConfig;class USeatedTransitionComponent;
+class UPatientStateConfig;
+class USeatedTransitionComponent;
 class UCooperationRampComponent;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnPatientStateChanged, EPatientState, NewState);
@@ -137,6 +138,9 @@ public:
 	/** Get the seated transition component */
 	UFUNCTION(BlueprintCallable, Category = "Patient")
 	USeatedTransitionComponent* GetSeatedTransitionComponent() const { return SeatedTransition; }
+
+	UFUNCTION(BlueprintCallable, Category = "Patient|Seated Transition")
+	bool BeginSeatedTransitionAt(const FTransform& SeatTarget);
 
 	/** Check if neck is currently being supported */
 	UFUNCTION(BlueprintCallable, Category = "Patient")
@@ -305,6 +309,9 @@ private:
 	/** Called when the seated settle is cancelled (patient fell back) */
 	UFUNCTION()
 	void OnSettleCancelled();
+
+	UFUNCTION()
+	void OnSeatedTransitionComplete();
 
 	/** Find the state config matching a given state; returns nullptr if none */
 	UPatientStateConfig* FindStateConfig(EPatientState State) const;

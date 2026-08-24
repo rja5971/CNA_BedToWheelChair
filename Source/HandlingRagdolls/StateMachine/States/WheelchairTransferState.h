@@ -6,6 +6,8 @@
 #include "../TransferTaskState.h"
 #include "WheelchairTransferState.generated.h"
 
+class AWheelchairActor;
+
 /**
  * Wheelchair Transfer State — guide the lifted patient to the wheelchair and seat them.
  * 
@@ -33,6 +35,12 @@ public:
 private:
 	/** Whether the patient has been successfully seated */
 	bool bPatientSeated = false;
+
+	/** Whether the asynchronous physics-to-animation handoff has started. */
+	bool bSeatingTransitionStarted = false;
+
+	/** The actual nearby wheelchair selected for the current handoff. */
+	TWeakObjectPtr<AWheelchairActor> ActiveWheelchair;
 
 	/** Whether the wheelchair is ready */
 	bool bWheelchairReady = false;

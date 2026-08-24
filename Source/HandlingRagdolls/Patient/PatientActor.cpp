@@ -92,6 +92,7 @@ void APatientActor::BeginPlay()
 
 		// When settle is cancelled (patient fell back), revert to BeingSupported state
 		SeatedTransition->OnSettleCancelled.AddDynamic(this, &APatientActor::OnSettleCancelled);
+		SeatedTransition->OnSeatedReached.AddDynamic(this, &APatientActor::OnSeatedTransitionComplete);
 	}
 
 	// Initialize the cooperation ramp component
@@ -130,19 +131,11 @@ void APatientActor::Tick(float DeltaTime)
 	// Continuously monitor spine stress
 	UpdateSpineStress(DeltaTime);
 
-	// If the seated transition component is currently settling, don't run sit detection.
-	if (SeatedTransition && SeatedTransition->IsSettling())
-	{
-		return;
-	}
-
-	// Sit detection: if the player has folded the patient upright past the threshold
-	// (and we have a seated pose to lock into), snap to the seated pose and freeze so
-	// the next step (belt) can proceed. Only while being handled and not already locked.
-	if (SeatedTransition && !SeatedTransition->IsSeatedLocked() &&
-		(CurrentState == EPatientState::LyingDown ||
-		 CurrentState == EPatientState::BeingSupported ||
-		 CurrentState == EPatientState::BeingLifted))
+	// During the bed sit-up, the patient remains physics-driven until the torso
+	// crosses the upright threshold. At that point SetPatientState(Seated) applies
+	// DA_State_Seated to lock the physical pose; it does not play the animation.
+	// The seated animation is reserved for the targeted wheelchair handoff.
+	if (SeatedTransition && CurrentState == EPatientState::BeingSupported)
 	{
 		const float TorsoAngle = SeatedTransition->GetTorsoUprightAngleDeg();
 
@@ -151,7 +144,7 @@ void APatientActor::Tick(float DeltaTime)
 		// muscles (like a real conscious person being helped to sit). This creates
 		// the "aliveness" feel — they're not a dead weight the whole way up.
 		// Delegated to the CooperationRampComponent for configurability.
-		if (CooperationRamp && PatientPhysics && PatientMesh && CurrentState == EPatientState::BeingSupported)
+		if (CooperationRamp && PatientPhysics && PatientMesh)
 		{
 			CooperationRamp->TickRamp(TorsoAngle, SeatedTransition->SitUprightAngleThreshold);
 		}
@@ -432,6 +425,11 @@ float APatientActor::GetCurrentAngleDeviation(FName BoneName) const
 
 void APatientActor::SetPatientState(EPatientState NewState)
 {
+	if (NewState != EPatientState::Seated && SeatedTransition && SeatedTransition->IsSeatedLocked())
+	{
+		SeatedTransition->ResetTransition();
+	}
+
 	if (CurrentState != NewState)
 	{
 		CurrentState = NewState;
@@ -551,6 +549,13 @@ UPhysicalAnimationComponent* APatientActor::GetPhysicalAnimationComponent() cons
 	return PatientPhysics ? PatientPhysics->GetPhysicalAnimationComponent() : nullptr;
 }
 
+bool APatientActor::BeginSeatedTransitionAt(const FTransform& SeatTarget)
+{
+	if (!SeatedTransition || SeatedTransition->IsSeatedLocked()) return false;
+	SeatedTransition->BeginSeatedBlendToTarget(SeatTarget);
+	return SeatedTransition->IsSettling();
+}
+
 // ============================================================
 // Internal Helpers
 // ============================================================
@@ -617,20 +622,40 @@ bool APatientActor::IsNeckSupportBone(FName BoneName) const
 
 void APatientActor::OnSettleCancelled()
 {
-	// Patient fell back before settling — revert to previous state.
-	// The physics profile is already reverted by the component.
-	if (bNeckIsSupported)
+	// A wheelchair handoff begins while the belt is attached. Restore that
+	// transfer state so its held/pivot configuration is reapplied for a retry.
+	CurrentState = AttachedBelt
+		? EPatientState::BeingTransferred
+		: (bNeckIsSupported ? EPatientState::BeingSupported : EPatientState::LyingDown);
+
+	if (UPatientStateConfig* RestoreConfig = FindStateConfig(CurrentState))
 	{
-		CurrentState = EPatientState::BeingSupported;
+		if (PatientPhysics)
+		{
+			PatientPhysics->ApplyStateConfig(RestoreConfig);
+		}
 	}
 	else
 	{
-		CurrentState = EPatientState::LyingDown;
+		ApplyPhysicalAnimProfile(EPhysicalAnimProfile::Relaxed);
 	}
+
 	OnPatientStateChanged.Broadcast(CurrentState);
 
-	UE_LOG(LogTemp, Log, TEXT("PatientActor: Settle cancelled — reverted to %s"),
-		CurrentState == EPatientState::BeingSupported ? TEXT("BeingSupported") : TEXT("LyingDown"));
+	UE_LOG(LogTemp, Log, TEXT("PatientActor: Wheelchair seating cancelled — restored state %d"),
+		static_cast<int32>(CurrentState));
+}
+
+void APatientActor::OnSeatedTransitionComplete()
+{
+	if (CurrentState == EPatientState::Seated) return;
+
+	// Applying DA_State_Seated here would re-enable pinned physics bodies and
+	// replace the animation we have just blended into.
+	CurrentState = EPatientState::Seated;
+	ActiveProfile = EPhysicalAnimProfile::Seated;
+	OnPatientStateChanged.Broadcast(CurrentState);
+	UE_LOG(LogTemp, Log, TEXT("PatientActor: Seated transition complete; seated idle owns the pose."));
 }
 
 // ============================================================

@@ -65,6 +65,12 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Belt")
 	int32 GetActiveGrabCount() const { return ActiveGrabbers.Num(); }
 
+	/** Whether the final belt handle was released and has not yet been handled. */
+	bool HasPendingFinalHandleRelease() const { return bFinalHandleReleasePending; }
+
+	/** Consume the one-shot final-handle release request. */
+	bool ConsumeFinalHandleRelease();
+
 	// ============================================================
 	// Grab Delegation (called by owning BeltActor's IGrabbable impl)
 	// ============================================================
@@ -154,6 +160,9 @@ private:
 
 	/** Whether we were in a two-hand grab last frame (for event edge detection) */
 	bool bWasTwoHandGrab = false;
+
+	/** One-shot signal used to trigger seating when the belt is released in a chair. */
+	bool bFinalHandleReleasePending = false;
 
 	/** Mesh component of the belt (for physics interaction) */
 	UPROPERTY()

@@ -8,12 +8,16 @@
 #include "../../Components/BeltComponent.h"
 #include "../../Components/ScoringComponent.h"
 #include "../../Components/PatientPhysicsComponent.h"
+#include "../../Components/SeatedTransitionComponent.h"
 #include "../../Patient/PatientActor.h"
+#include "EngineUtils.h"
 
 void UWheelchairTransferState::EnterState(UTransferStateMachine* StateMachine)
 {
 	Super::EnterState(StateMachine);
 	bPatientSeated = false;
+	bSeatingTransitionStarted = false;
+	ActiveWheelchair.Reset();
 	bWheelchairReady = false;
 	bPatientInRange = false;
 	bPivotActive = false;
@@ -35,11 +39,54 @@ void UWheelchairTransferState::TickState(float DeltaTime)
 	if (!OwningStateMachine) return;
 
 	IIPatient* Patient = OwningStateMachine->GetPatientInterface();
-	AWheelchairActor* Wheelchair = OwningStateMachine->GetWheelchair();
 	UBeltComponent* Belt = OwningStateMachine->GetBelt();
 	UScoringComponent* Scoring = OwningStateMachine->GetScoring();
 
-	if (!Patient || !Wheelchair) return;
+	if (!Patient) return;
+
+	if (bSeatingTransitionStarted)
+	{
+		AWheelchairActor* Wheelchair = ActiveWheelchair.Get();
+		APatientActor* PatientActor = OwningStateMachine->GetPatient();
+		USeatedTransitionComponent* Transition = PatientActor ? PatientActor->GetSeatedTransitionComponent() : nullptr;
+		if (Wheelchair && Transition && Transition->IsSeatedLocked())
+		{
+			bPatientSeated = true;
+			Wheelchair->OnTransferComplete(PatientActor);
+		}
+		else if (!Transition || !Transition->IsSettling())
+		{
+			bSeatingTransitionStarted = false;
+			if (Wheelchair)
+			{
+				Wheelchair->OnTransferFailed(PatientActor);
+			}
+			ActiveWheelchair.Reset();
+		}
+		return;
+	}
+
+	// Resolve the chair the patient is actually approaching. Migrated levels can
+	// contain duplicate wheelchair actors, so iterator order is not authoritative.
+	AWheelchairActor* Wheelchair = nullptr;
+	float NearestSeatDistanceSq = TNumericLimits<float>::Max();
+	const FVector PelvisLocation = Patient->GetPelvisLocation();
+	for (TActorIterator<AWheelchairActor> It(OwningStateMachine->GetWorld()); It; ++It)
+	{
+		AWheelchairActor* Candidate = *It;
+		const float DistanceSq = FVector::DistSquared(
+			PelvisLocation, Candidate->GetTargetSeatTransform().GetLocation());
+		if (DistanceSq < NearestSeatDistanceSq)
+		{
+			NearestSeatDistanceSq = DistanceSq;
+			Wheelchair = Candidate;
+		}
+	}
+	if (!Wheelchair)
+	{
+		Wheelchair = OwningStateMachine->GetWheelchair();
+	}
+	if (!Wheelchair) return;
 
 	// --- Pivot Rotation: drive pelvis yaw from two-hand grab ---
 	if (Belt && Belt->IsTwoHandGrab())
@@ -84,11 +131,42 @@ void UWheelchairTransferState::TickState(float DeltaTime)
 	FTransform SeatTransform = Wheelchair->GetTargetSeatTransform();
 	FVector SeatLocation = SeatTransform.GetLocation();
 
-	FVector PelvisLocation = Patient->GetPelvisLocation();
 	float Distance = FVector::Dist(PelvisLocation, SeatLocation);
 	float AcceptRadius = Wheelchair->GetAcceptanceRadius();
 
 	bPatientInRange = (Distance <= AcceptRadius);
+
+	auto StartSeatingTransition = [&]()
+	{
+		AActor* PatientActor = Cast<AActor>(OwningStateMachine->GetPatientObject());
+		Wheelchair->OnTransferBegin(PatientActor);
+
+		APatientActor* ConcretePatient = OwningStateMachine->GetPatient();
+		if (ConcretePatient && ConcretePatient->BeginSeatedTransitionAt(SeatTransform))
+		{
+			ActiveWheelchair = Wheelchair;
+			bSeatingTransitionStarted = true;
+			UE_LOG(LogTemp, Log, TEXT("WheelchairTransfer: Starting seated animation on %s at %.1f cm."),
+				*Wheelchair->GetName(), Distance);
+		}
+		else
+		{
+			Patient->SetPatientState(EPatientState::Seated);
+			bPatientSeated = true;
+			Wheelchair->OnTransferComplete(PatientActor);
+		}
+	};
+
+	// Releasing the final belt handle in the seat zone is the authoritative
+	// seating gesture. It bypasses the velocity gate and begins immediately.
+	const bool bFinalHandleReleased = Belt && Belt->ConsumeFinalHandleRelease();
+	if (bFinalHandleReleased && Wheelchair->IsLocationInSeatArea(PelvisLocation))
+	{
+		UE_LOG(LogTemp, Log, TEXT("WheelchairTransfer: Final handle released inside %s seat area."),
+			*Wheelchair->GetName());
+		StartSeatingTransition();
+		return;
+	}
 
 	if (bPatientInRange)
 	{
@@ -98,13 +176,7 @@ void UWheelchairTransferState::TickState(float DeltaTime)
 
 		if (Speed < 50.0f) // Low enough velocity = successful seating
 		{
-			bPatientSeated = true;
-			AActor* PatientActor = Cast<AActor>(OwningStateMachine->GetPatientObject());
-			Wheelchair->OnTransferBegin(PatientActor);
-			Wheelchair->OnTransferComplete(PatientActor);
-
-			// Set patient to seated state (exits pivot mode)
-			Patient->SetPatientState(EPatientState::Seated);
+			StartSeatingTransition();
 		}
 		else if (Speed > 100.0f && Scoring)
 		{

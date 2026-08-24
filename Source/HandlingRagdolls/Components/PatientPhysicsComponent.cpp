@@ -4,6 +4,7 @@
 #include "Components/SkeletalMeshComponent.h"
 #include "PhysicsEngine/PhysicalAnimationComponent.h"
 #include "PhysicsEngine/BodyInstance.h"
+#include "PhysicsEngine/PhysicsConstraintComponent.h"
 #include "Animation/AnimSequence.h"
 #include "Engine/SkeletalMesh.h"
 #include "ReferenceSkeleton.h"
@@ -28,10 +29,9 @@ void UPatientPhysicsComponent::TickComponent(float DeltaTime, ELevelTick TickTyp
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 
-	// --- HOLD POSE: re-assert pinned (Anchored) bones to their captured transforms ---
-	// These bones SIMULATE (so they drive the mesh), but we force them back to the
-	// captured pose every PostPhysics frame and kill their velocity, so they hold
-	// the player-folded upright pose exactly.
+	// --- HOLD POSE: re-assert constrained (Anchored) bodies after physics. ---
+	// World constraints prevent movement during the physics step while keeping the
+	// bodies simulated, so the physical pose continues to drive the rendered mesh.
 	if (bHoldingPose && Mesh)
 	{
 		for (const TPair<FName, FTransform>& Pair : HeldBoneTransforms)
@@ -89,7 +89,8 @@ void UPatientPhysicsComponent::TickComponent(float DeltaTime, ELevelTick TickTyp
 		FBodyInstance* BI = Mesh->GetBodyInstance(B);
 		FVector Loc = Mesh->GetBoneLocation(B);
 		bool bSim = BI ? BI->IsInstanceSimulatingPhysics() : false;
-		return FString::Printf(TEXT("%s Z=%.1f sim=%d"), *B.ToString(), Loc.Z, bSim ? 1 : 0);
+		return FString::Printf(TEXT("%s=(%.1f,%.1f,%.1f) sim=%d"),
+			*B.ToString(), Loc.X, Loc.Y, Loc.Z, bSim ? 1 : 0);
 	};
 
 	// Torso angle
@@ -285,6 +286,7 @@ void UPatientPhysicsComponent::ApplyStateConfig(UPatientStateConfig* Config)
 			PreTransforms.Add(B, BI->GetUnrealWorldTransform());
 		}
 	}
+	ClearAnchorConstraints();
 
 	// --- Build a complete behavior map (default for all, then overrides) ---
 	static const TArray<EPatientBoneGroup> OrderedGroups = {
@@ -385,12 +387,12 @@ void UPatientPhysicsComponent::ApplyStateConfig(UPatientStateConfig* Config)
 		return Beh;
 	};
 
-	// --- Apply per-bone. ALL bodies simulate; Anchored bones are pinned each frame. ---
-	// Simulating bodies natively drive the skeletal mesh, so what we pin is what renders.
+	// --- Apply per-bone. All bodies simulate so physics drives the rendered pose. ---
+	// Anchored bodies receive world constraints and a PostPhysics transform hold.
 	HeldBoneTransforms.Empty();
 	PivotBoneTransforms.Empty();
 
-	// Normal kinematic settings (we're NOT using kinematic holds anymore).
+	// State anchors do not use animation-driven kinematic bodies.
 	Mesh->bUpdateMeshWhenKinematic = false;
 	Mesh->KinematicBonesUpdateType = EKinematicBonesUpdateToPhysics::SkipSimulatingBones;
 
@@ -403,7 +405,7 @@ void UPatientPhysicsComponent::ApplyStateConfig(UPatientStateConfig* Config)
 		float StrengthOverride = -1.0f;
 		const EBoneBehavior Beh = ResolveBoneBehavior(BoneIdx, StrengthOverride);
 
-		// Every body simulates (so it drives the mesh). Anchored bodies get pinned.
+		// Every behavior starts from a deterministic simulated state.
 		BI->SetInstanceSimulatePhysics(true, false, true);
 
 		FPhysicalAnimationData Data;
@@ -413,14 +415,40 @@ void UPatientPhysicsComponent::ApplyStateConfig(UPatientStateConfig* Config)
 		{
 		case EBoneBehavior::Anchored:
 		{
-			// Pin this bone to its captured (player-folded) transform. Zero motor.
+			// The pelvis is the root anchor: make it genuinely kinematic so no grab
+			// force can translate the patient. Other anchored bodies stay simulated
+			// and use world constraints so they continue to render the captured pose.
 			const FTransform* Captured = PreTransforms.Find(BoneName);
 			if (Captured)
 			{
 				HeldBoneTransforms.Add(BoneName, *Captured);
+				const bool bIsPelvisAnchor = (BoneIdx == PelvisIdx);
+				if (bIsPelvisAnchor)
+				{
+					BI->SetInstanceSimulatePhysics(false, false, true);
+				}
 				BI->SetBodyTransform(*Captured, ETeleportType::TeleportPhysics, false);
 				BI->SetLinearVelocity(FVector::ZeroVector, false);
 				BI->SetAngularVelocityInRadians(FVector::ZeroVector, false);
+
+				if (!bIsPelvisAnchor)
+				{
+					UPhysicsConstraintComponent* Anchor = NewObject<UPhysicsConstraintComponent>(GetOwner());
+					if (Anchor)
+					{
+						Anchor->RegisterComponent();
+						Anchor->SetWorldTransform(*Captured);
+						Anchor->SetDisableCollision(true);
+						Anchor->SetLinearXLimit(ELinearConstraintMotion::LCM_Locked, 0.0f);
+						Anchor->SetLinearYLimit(ELinearConstraintMotion::LCM_Locked, 0.0f);
+						Anchor->SetLinearZLimit(ELinearConstraintMotion::LCM_Locked, 0.0f);
+						Anchor->SetAngularSwing1Limit(EAngularConstraintMotion::ACM_Locked, 0.0f);
+						Anchor->SetAngularSwing2Limit(EAngularConstraintMotion::ACM_Locked, 0.0f);
+						Anchor->SetAngularTwistLimit(EAngularConstraintMotion::ACM_Locked, 0.0f);
+						Anchor->SetConstrainedComponents(Mesh, BoneName, nullptr, NAME_None);
+						AnchorConstraints.Add(Anchor);
+					}
+				}
 			}
 			Data.OrientationStrength = 0.0f;
 			Data.AngularVelocityStrength = 0.0f;
@@ -484,8 +512,10 @@ void UPatientPhysicsComponent::ApplyStateConfig(UPatientStateConfig* Config)
 		UE_LOG(LogTemp, Warning, TEXT("[SEAT] Captured hold pose: spine_05 held Z=%.1f (held count=%d)"), HeldZ, HeldBoneTransforms.Num());
 	}
 
-	UE_LOG(LogTemp, Log, TEXT("PatientPhysics: Applied state config '%s' (default=%d, %d overrides, held=%d)"),
-		*Config->GetName(), (int32)Config->DefaultBehavior, Config->BoneGroups.Num(), HeldBoneTransforms.Num());
+	const FName PelvisBone = ResolveBoneName(EPatientBoneRole::Pelvis);
+	UE_LOG(LogTemp, Log, TEXT("PatientPhysics: Applied state config '%s' (default=%d, %d overrides, held=%d, pelvisAnchored=%d)"),
+		*Config->GetName(), (int32)Config->DefaultBehavior, Config->BoneGroups.Num(), HeldBoneTransforms.Num(),
+		HeldBoneTransforms.Contains(PelvisBone) ? 1 : 0);
 
 	// Diagnostic logging window
 	if (bHoldingPose)
@@ -499,10 +529,35 @@ void UPatientPhysicsComponent::ApplyStateConfig(UPatientStateConfig* Config)
 
 void UPatientPhysicsComponent::ClearHeldPose()
 {
+	ClearAnchorConstraints();
+	if (Mesh)
+	{
+		const FName Pelvis = ResolveBoneName(EPatientBoneRole::Pelvis);
+		if (HeldBoneTransforms.Contains(Pelvis))
+		{
+			if (FBodyInstance* PelvisBody = Mesh->GetBodyInstance(Pelvis))
+			{
+				PelvisBody->SetInstanceSimulatePhysics(true, false, true);
+			}
+		}
+	}
 	HeldBoneTransforms.Empty();
 	PivotBoneTransforms.Empty();
 	bHoldingPose = false;
 	UE_LOG(LogTemp, Log, TEXT("PatientPhysics: Cleared held pose — all bones free to simulate."));
+}
+
+void UPatientPhysicsComponent::ClearAnchorConstraints()
+{
+	for (UPhysicsConstraintComponent* Anchor : AnchorConstraints)
+	{
+		if (Anchor)
+		{
+			Anchor->BreakConstraint();
+			Anchor->DestroyComponent();
+		}
+	}
+	AnchorConstraints.Empty();
 }
 
 void UPatientPhysicsComponent::SetPivotYaw(float NewYawDegrees)
