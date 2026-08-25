@@ -42,6 +42,9 @@ private:
 	/** The actual nearby wheelchair selected for the current handoff. */
 	TWeakObjectPtr<AWheelchairActor> ActiveWheelchair;
 
+	/** Ready chair latched while the patient's pelvis remains in its approach zone. */
+	TWeakObjectPtr<AWheelchairActor> CandidateWheelchair;
+
 	/** Whether the wheelchair is ready */
 	bool bWheelchairReady = false;
 

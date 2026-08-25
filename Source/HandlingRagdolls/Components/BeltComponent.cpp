@@ -4,6 +4,9 @@
 #include "GrabComponent.h"
 #include "../Interfaces/IBeltAttachable.h"
 #include "../Interfaces/IPatient.h"
+#include "../Patient/PatientActor.h"
+#include "../Transfer/BeltActor.h"
+#include "PatientCarryComponent.h"
 #include "Components/PrimitiveComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Components/SkeletalMeshComponent.h"
@@ -145,6 +148,14 @@ void UBeltComponent::OnHandleGrabbed(UGrabComponent* Grabber, FName HandleName, 
 		}
 	}
 
+	if (APatientActor* PatientActor = Cast<APatientActor>(AttachedPatient))
+	{
+		if (UPatientCarryComponent* Carry = PatientActor->GetPatientCarryComponent())
+		{
+			Carry->BeginCarry(Grabber, Cast<ABeltActor>(GetOwner()));
+		}
+	}
+
 	// Check for two-hand grab start
 	if (ActiveGrabbers.Num() >= 2 && !bWasTwoHandGrab)
 	{
@@ -157,6 +168,13 @@ void UBeltComponent::OnHandleReleased(UGrabComponent* Grabber)
 {
 	if (!Grabber) return;
 	ActiveGrabbers.Remove(Grabber);
+	if (APatientActor* PatientActor = Cast<APatientActor>(AttachedPatient))
+	{
+		if (UPatientCarryComponent* Carry = PatientActor->GetPatientCarryComponent())
+		{
+			Carry->EndCarry(Grabber);
+		}
+	}
 	if (ActiveGrabbers.Num() == 0)
 	{
 		bFinalHandleReleasePending = true;

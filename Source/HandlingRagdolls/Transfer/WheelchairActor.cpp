@@ -34,6 +34,17 @@ AWheelchairActor::AWheelchairActor()
 	SeatZone->SetRelativeLocation(FVector(0.0f, 0.0f, 50.0f)); // Above wheelchair base
 	SeatZone->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
 	SeatZone->SetGenerateOverlapEvents(true);
+	SeatZone->ShapeColor = FColor::Green;
+
+	// Broad, oriented recognition area. Detection is geometric rather than
+	// collision-response-dependent so kinematic/query-only patients work reliably.
+	ApproachZone = CreateDefaultSubobject<UBoxComponent>(TEXT("ApproachZone"));
+	ApproachZone->SetupAttachment(RootComponent);
+	ApproachZone->SetBoxExtent(FVector(90.0f, 75.0f, 80.0f));
+	ApproachZone->SetRelativeLocation(FVector(0.0f, 0.0f, 50.0f));
+	ApproachZone->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	ApproachZone->SetGenerateOverlapEvents(false);
+	ApproachZone->ShapeColor = FColor::Yellow;
 
 	// Seat target (exact seating position)
 	SeatTarget = CreateDefaultSubobject<USceneComponent>(TEXT("SeatTarget"));
@@ -48,6 +59,19 @@ void AWheelchairActor::BeginPlay()
 	if (bStartWithBrakesLocked)
 	{
 		LockBrakes();
+	}
+
+	if (SeatZone)
+	{
+		SeatZone->SetBoxExtent(SeatCommitZoneExtent.GetAbs());
+		SeatZone->SetHiddenInGame(!bShowDetectionZones);
+		SeatZone->SetVisibility(bShowDetectionZones);
+	}
+	if (ApproachZone)
+	{
+		ApproachZone->SetBoxExtent(ApproachZoneExtent.GetAbs());
+		ApproachZone->SetHiddenInGame(!bShowDetectionZones);
+		ApproachZone->SetVisibility(bShowDetectionZones);
 	}
 }
 
@@ -85,7 +109,28 @@ float AWheelchairActor::GetAcceptanceRadius() const
 bool AWheelchairActor::IsLocationInSeatArea(const FVector& WorldLocation, float ExtraTolerance) const
 {
 	if (!SeatZone) return false;
-	return SeatZone->Bounds.GetBox().ExpandBy(FMath::Max(0.0f, ExtraTolerance)).IsInsideOrOn(WorldLocation);
+	const FVector Local = SeatZone->GetComponentTransform().InverseTransformPosition(WorldLocation);
+	const FVector Extent = SeatZone->GetUnscaledBoxExtent()
+		+ FVector(FMath::Max(0.0f, ExtraTolerance));
+	return FMath::Abs(Local.X) <= Extent.X
+		&& FMath::Abs(Local.Y) <= Extent.Y
+		&& FMath::Abs(Local.Z) <= Extent.Z;
+}
+
+bool AWheelchairActor::IsLocationInApproachArea(const FVector& WorldLocation, float ExtraTolerance) const
+{
+	if (!ApproachZone) return false;
+	const FVector Local = ApproachZone->GetComponentTransform().InverseTransformPosition(WorldLocation);
+	const FVector Extent = ApproachZone->GetUnscaledBoxExtent()
+		+ FVector(FMath::Max(0.0f, ExtraTolerance));
+	return FMath::Abs(Local.X) <= Extent.X
+		&& FMath::Abs(Local.Y) <= Extent.Y
+		&& FMath::Abs(Local.Z) <= Extent.Z;
+}
+
+float AWheelchairActor::GetSeatDistanceSquared(const FVector& WorldLocation) const
+{
+	return FVector::DistSquared(WorldLocation, GetTargetSeatTransform().GetLocation());
 }
 
 void AWheelchairActor::OnTransferBegin(AActor* Patient)

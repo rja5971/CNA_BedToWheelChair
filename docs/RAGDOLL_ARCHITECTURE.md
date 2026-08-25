@@ -29,7 +29,8 @@
 |  ├── UPatientPhysicsComponent     (physics lifecycle: profiles, mass, damping,    |
 |  │                                 ApplyStateConfig — data-driven bone behavior)  |
 |  ├── USeatedTransitionComponent   (pure-physics sit detection + settle + freeze)  |
-|  └── UCooperationRampComponent    (progressive aliveness during fold-up)          |
+|  ├── UCooperationRampComponent    (progressive aliveness during fold-up)          |
+|  └── UPatientCarryComponent       (animated hand follow + headset billboard yaw)  |
 |                                                                                   |
 |  Data-driven behavior via UPatientStateConfig assets (StateConfigs array):        |
 |    each state → per-bone-group behavior (Anchored / Stiff / Free)                  |
@@ -40,8 +41,9 @@
 |  BELT                              |   |  ENVIRONMENT                         |
 |  ABeltActor (AActor) : IGrabbable  |   |  AWheelchairActor : ITransferTarget  |
 |  └── UBeltComponent (attach/lift)  |   |  ├── StaticMeshComponent             |
-|      handles: BeltHandle_L/_R      |   |  ├── SeatZone (UBoxComponent)        |
-+------------------------------------+   |  └── SeatTarget (USceneComponent)    |
+|      attached carry handle         |   |  ├── ApproachZone (recognition)      |
++------------------------------------+   |  ├── SeatZone (commit)               |
+                                         |  └── SeatTarget (exact pelvis pose)  |
                                          +--------------------------------------+
 ```
 
@@ -55,14 +57,19 @@ The patient was refactored from a 700-line god class into focused components (SR
 | `UPatientPhysicsComponent` | Physics mode, profiles, mass, damping, `ApplyStateConfig()` |
 | `USeatedTransitionComponent` | Bed sit detection plus targeted physics-to-animation wheelchair handoff |
 | `UCooperationRampComponent` | Progressive muscle engagement during fold-up (curve-driven) |
+| `UPatientCarryComponent` | Fully kinematic carry animation, averaged hand following, headset-facing yaw, release recovery |
 | `UGrabComponent` | VR hand physics-handle grab (via IGrabbable) |
 | `USpineMonitorComponent` | Observes ISpineMonitorable, fires stress events |
 
 **Data-driven state system:** `UPatientStateConfig` assets define per-state bone behavior.
 Each config lists bone GROUPS (Pelvis, Spine, Neck, Head, Arms, Legs) with a behavior
 (Anchored / Stiff / Free). The state machine drives transitions; the config drives physics.
-Bed positioning remains physics-driven. Once the patient is released inside a
-wheelchair `SeatZone`, ragdoll control is disabled immediately, the animated pelvis
+Bed positioning remains physics-driven. Attached-belt carrying becomes animation-owned
+when a compatible `CarryAnimation` is configured: body simulation is disabled, the
+belt handle follows the active hand anchor, and the upright patient billboard-yaws
+toward the headset without inheriting wrist rotation. The previous physics path is
+retained as an asset-validation fallback. Once the patient is released inside a
+latched ready wheelchair's oriented `SeatZone`, the animated pelvis
 snaps exactly to that chair's `SeatTarget`, and `/Game/Animations/AN_Patient_Sitting`
 takes full control in the same frame. `SeatTarget` supplies the pelvis position;
 the wheelchair actor supplies final facing. A calibrated `-180°` yaw compensates
@@ -181,12 +188,13 @@ not a concrete `APatientActor*`. State sequence is a data-driven `TArray<ETransf
   broadcasts `OnSpineWarning`, `OnSpineCritical`, `OnSpineFailure`, `OnSpineSafe`.
 - **`UGrabComponent`** — on VR hands. `TryGrab()` sphere-traces for `IGrabbable`,
   grabs via an internal `UPhysicsHandleComponent`, tracks the hand each tick.
-- **`UBeltComponent` + `ABeltActor`** — belt attaches to an `IBeltAttachable` via a
-  `UPhysicsConstraintComponent`; once attached, `BeltHandle_L/_R` become grab points.
+- **`UBeltComponent` + `ABeltActor`** — belt attaches directly to the configured
+  patient skeletal bone. Attached grabs delegate transport to `UPatientCarryComponent`
+  when its animation is valid; otherwise they retain the physics-handle fallback.
 - **`AWheelchairActor`** — `ITransferTarget`; each instance owns an independent
-  `SeatZone` and `SeatTarget`. The nearest chair is selected dynamically. Releasing
-  the final belt handle inside its seat zone bypasses the velocity gate and starts
-  the targeted animation handoff immediately.
+  oriented `ApproachZone`, `SeatZone`, and `SeatTarget`. Ready chairs are recognized
+  and latched in the approach zone; duplicate/unavailable chairs cannot steal
+  selection, and final release is consumed only after a commit-zone match.
 - **`UTransferStateMachine`** — orchestrates the 6-state flow; each state is a
   `UTransferTaskState` subclass with its own entry/tick/transition/failure logic.
 - **`UScoringComponent`** — accumulates penalties (spine stress, dropping too fast,
@@ -207,5 +215,7 @@ not a concrete `APatientActor*`. State sequence is a data-driven `TArray<ETransf
 - **Two grab phases:**
   - **Phase 1 (neck support):** grab the patient directly on `neck_01` / head bones.
   - **Phase 2 (lift):** grab `BeltHandle_L` / `BeltHandle_R` on the attached `ABeltActor`.
+- During kinematic Phase 2, no physics handle is created. Grab events instead drive
+  `UPatientCarryComponent`, which updates the whole animated mesh after pose evaluation.
 - Stiffness/damping are exposed on `UGrabComponent` (`GrabLinearStiffness`,
   `GrabAngularStiffness`, etc.) to tune the "heavy body" weight feel.

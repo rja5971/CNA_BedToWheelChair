@@ -1,14 +1,27 @@
 # CNA Bed To Wheelchair - Patient Transfer System
 
 ## Overview
-This project is a VR training simulation focused on physically lifting and transferring a ragdoll patient between a bed and a wheelchair using a transfer belt. It heavily relies on Unreal Engine's physics and skeletal mesh systems to simulate realistic weight and patient handling mechanics.
+
+This Unreal Engine 5.5 VR training simulation guides a belt-assisted patient transfer from bed to wheelchair. Bed preparation remains physics-driven; belt carrying and final wheelchair seating use stable animation-owned modes.
 
 ## Core Systems
-*   **Patient Ragdoll Physics (`PatientPhysicsComponent`)**: Handles capturing and freezing the patient's physics state into specific poses (e.g., Lying Down, Seated) by pinning Anchored and Pivot bones in world space.
-*   **Transfer Belt (`BeltActor`, `BeltComponent`)**: A physical tool that can be grabbed in VR. When brought near a patient, it auto-attaches to the spine, turning the belt handles into primary lift points for the entire patient ragdoll.
-*   **VR Grab System (`GrabComponent`, `IGrabbable`)**: A custom C++ grip component that uses `UPhysicsHandleComponent` to interface with heavy ragdolls, implementing dynamic rotation constraints so patients dangle naturally when lifted instead of rigidly matching the user's wrist.
-*   **Seated State Transition (`SeatedTransitionComponent`)**: Keeps bed seating physics-driven and locks the upright pose through `DA_State_Seated`. Final chair placement immediately disables ragdoll control, snaps the animated pelvis exactly to the selected chair's `SeatTarget`, applies the patient's calibrated `-180°` skeletal yaw relative to chair forward, and plays `/Game/Animations/AN_Patient_Sitting` at full weight.
-*   **Multi-Chair Release Handoff**: Every `WheelchairActor` owns an independent `SeatZone` and `SeatTarget`. Releasing the final belt handle inside any ready chair's seat area selects that chair and starts the seating handoff immediately; no single manager reference limits the destination.
 
-## Development Log
-Detailed local development notes are maintained in the ignored `devlog.md`; committed architecture and migration guidance lives under `docs/`.
+- **Patient physics (`PatientPhysicsComponent`)**: Owns state-driven Anchored, Pivot, Stiff, and Free body behavior, physical-animation profiles, mass, damping, and safe physics recovery.
+- **Transfer belt (`BeltActor`, `BeltComponent`)**: Auto-attaches to the patient's configured spine bone and provides the VR grab lifecycle for carrying and final release.
+- **Kinematic billboard carry (`PatientCarryComponent`)**: Validates and loops an upright carry animation, disables patient body simulation, aligns the belt handle to the active VR hand anchor every frame, and rotates the whole patient around world Z to face the actual headset. The former physics-handle carry remains the fallback when no compatible animation is assigned.
+- **VR grabbing (`GrabComponent`, `IGrabbable`)**: Normally uses `UPhysicsHandleComponent`, but supports kinematic interactions that receive grab/release events without creating a competing physics handle.
+- **Seated transition (`SeatedTransitionComponent`)**: Keeps bed seating physics-driven. Final wheelchair release disables ragdoll control, aligns the animated pelvis exactly to the selected chair's `SeatTarget`, applies the calibrated `-180 degree` skeletal yaw, and plays `/Game/Animations/AN_Patient_Sitting` at full weight.
+- **Two-zone multi-chair handoff**: Every `WheelchairActor` owns an oriented `ApproachZone`, smaller `SeatZone`, and exact `SeatTarget`. Entering a ready chair's approach area latches it immediately; releasing the final belt handle in its commit zone starts seating. Duplicate or unavailable chairs cannot steal selection, and release is consumed only after a valid match.
+
+## Validated Runtime Flow
+
+`Idle -> Neck Support -> Belt Attach -> Kinematic Belt Carry -> Ready-Chair Recognition -> Release in Seat Commit Zone -> Seated Animation -> Complete`
+
+Billboard carrying, re-grab/release, oriented chair recognition, rotated-chair detection, and final seating have passed VR testing. `CNABedToWheelchairEditor Win64 Development` compiles and links successfully.
+
+## Documentation
+
+- Architecture: `docs/RAGDOLL_ARCHITECTURE.md`
+- Setup and migration: `docs/RAGDOLL_MIGRATION.md`
+- Development history: `devlog.md`
+- VR locomotion: `docs/VR_Locomotion_Guide.md`

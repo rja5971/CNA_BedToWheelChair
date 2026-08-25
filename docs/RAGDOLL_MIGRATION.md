@@ -24,7 +24,8 @@ The CNA project-owned maps, `VRPawn`, input mappings, packaging settings, and ex
    - physics asset: `/Game/Patient/PA_Patient_SpineRestricted`
    - bone mapping: `/Game/PatientSetup/DA_BoneMapping_SKM_Manny_Simple`
    - state configs from `/Game/Data/States`
-4. On every `WheelchairActor`, assign the CNA wheelchair mesh from `/Game/Project/EventProps/WheelChair` and align its `SeatTarget` and `SeatZone` to the physical chair. Runtime seating dynamically selects the chair containing the patient's pelvis.
+   - `PatientCarry -> Carry Animation`: an upright in-place loop using the patient skeleton (currently `/Game/Animations/Idle_UE`)
+4. On every `WheelchairActor`, assign the CNA wheelchair mesh from `/Game/Project/EventProps/WheelChair` and align its `SeatTarget`, broad `ApproachZone`, and smaller `SeatZone` to the physical chair. Detection uses chair-local space and remains accurate when the chair rotates. Enable `Show Detection Zones` to tune the yellow recognition box and green commit box.
 5. Assign the patient, belt, and wheelchair references on `TransferManagerActor`, and enable `Auto Start` if the training should begin immediately.
 6. Add one native `GrabComponent` to each hand/controller component on the CNA `VRPawn`. Bind grip pressed to `Try Grab` and grip released to `Release Grab` for the corresponding hand.
 7. Add `VRLocomotionSettings` to the CNA `VRPawn` if runtime switching between teleport/smooth move and snap/smooth turn is required. The existing CNA input assets are not replaced.
@@ -33,12 +34,17 @@ The runtime flow is:
 
 `Idle -> Neck Support -> Belt Attach -> Belt Lift -> Wheelchair Transfer -> Complete`
 
-The `BeingTransferred` data asset uses pivot behavior: the pelvis position remains
-fixed while two belt-hand positions drive patient yaw. Releasing the final belt
-handle inside any wheelchair seat zone immediately disables ragdoll control,
-aligns the animated pelvis exactly to that chair's target, and starts
+When a compatible carry animation is assigned, `UPatientCarryComponent` disables
+patient body simulation, aligns the belt handle to the active hand anchor, and
+yaw-billboards the upright patient toward the actual VR headset. The former physics
+carry remains the automatic fallback if the animation is missing or incompatible.
+Entering a ready wheelchair's approach zone latches that chair. Releasing the final
+belt handle inside its commit zone aligns the animated pelvis to its target and starts
 `/Game/Animations/AN_Patient_Sitting` at full weight in the same frame. Final yaw
 uses wheelchair forward with the patient's calibrated `-180°` skeletal-axis offset.
+
+Release is not consumed until both a ready latched chair and valid commit-zone match
+exist. Kinematic physics velocity is not used as a seating trigger.
 
 ## Important integration note
 

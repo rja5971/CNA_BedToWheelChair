@@ -46,10 +46,12 @@ public:
 	virtual TArray<FName> GetGrabbableBoneNames() const override;
 	virtual FName GetGrabBoneOverride() const override;
 	virtual bool RequiresRotationConstraint() const override;
+	virtual bool ShouldUsePhysicsHandle() const override;
 
 	/** Get the belt component */
 	UFUNCTION(BlueprintCallable, Category = "Belt")
 	UBeltComponent* GetBeltComponent() const { return BeltComp; }
+	FVector GetHandleWorldLocation() const;
 
 protected:
 	/** The belt mesh */

@@ -4,6 +4,7 @@
 #include "../Components/BeltComponent.h"
 #include "../Components/GrabComponent.h"
 #include "../Interfaces/IBeltAttachable.h"
+#include "../Patient/PatientActor.h"
 #include "Components/StaticMeshComponent.h"
 #include "Components/SphereComponent.h"
 #include "Components/SkeletalMeshComponent.h"
@@ -292,4 +293,21 @@ bool ABeltActor::RequiresRotationConstraint() const
 	// If the belt is unattached and being carried, we DO want a rotation constraint
 	// so it acts like a rigid tool in the hand, making it easier to aim at the patient.
 	return true;
+}
+
+bool ABeltActor::ShouldUsePhysicsHandle() const
+{
+	if (BeltComp && BeltComp->IsAttached())
+	{
+		if (const APatientActor* Patient = Cast<APatientActor>(BeltComp->GetAttachedPatient()))
+		{
+			return !Patient->CanUseKinematicCarry();
+		}
+	}
+	return true;
+}
+
+FVector ABeltActor::GetHandleWorldLocation() const
+{
+	return HandleFront ? HandleFront->GetComponentLocation() : GetActorLocation();
 }

@@ -22,6 +22,7 @@ class UPatientPhysicsComponent;
 class UPatientStateConfig;
 class USeatedTransitionComponent;
 class UCooperationRampComponent;
+class UPatientCarryComponent;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnPatientStateChanged, EPatientState, NewState);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnPatientInjured);
@@ -139,6 +140,17 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Patient")
 	USeatedTransitionComponent* GetSeatedTransitionComponent() const { return SeatedTransition; }
 
+	UFUNCTION(BlueprintPure, Category = "Patient|Kinematic Carry")
+	UPatientCarryComponent* GetPatientCarryComponent() const { return PatientCarry; }
+
+	UFUNCTION(BlueprintPure, Category = "Patient|Kinematic Carry")
+	bool IsKinematicCarryActive() const;
+
+	UFUNCTION(BlueprintPure, Category = "Patient|Kinematic Carry")
+	bool CanUseKinematicCarry() const;
+
+	void RestorePhysicsAfterKinematicCarry();
+
 	UFUNCTION(BlueprintCallable, Category = "Patient|Seated Transition")
 	bool BeginSeatedTransitionAt(const FTransform& SeatTarget);
 
@@ -201,6 +213,10 @@ protected:
 	 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Patient")
 	TObjectPtr<UCooperationRampComponent> CooperationRamp;
+
+	/** Owns the animation-only, headset-facing belt carry mode. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Patient")
+	TObjectPtr<UPatientCarryComponent> PatientCarry;
 
 	// ============================================================
 	// Configuration

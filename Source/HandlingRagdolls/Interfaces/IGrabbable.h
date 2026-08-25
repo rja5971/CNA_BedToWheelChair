@@ -51,4 +51,7 @@ public:
 	 * or just location (like a heavy ragdoll or pendulum).
 	 */
 	virtual bool RequiresRotationConstraint() const { return true; }
+
+	/** Kinematic interactions can receive grab events without creating a physics handle. */
+	virtual bool ShouldUsePhysicsHandle() const { return true; }
 };

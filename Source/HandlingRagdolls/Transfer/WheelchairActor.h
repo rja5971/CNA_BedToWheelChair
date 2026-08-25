@@ -61,7 +61,14 @@ public:
 
 	/** Whether a world-space point is inside the chair's seat area. */
 	UFUNCTION(BlueprintCallable, Category = "Wheelchair")
-	bool IsLocationInSeatArea(const FVector& WorldLocation, float ExtraTolerance = 12.0f) const;
+	bool IsLocationInSeatArea(const FVector& WorldLocation, float ExtraTolerance = 8.0f) const;
+
+	/** Broad, oriented recognition zone used to latch this chair before release. */
+	UFUNCTION(BlueprintCallable, Category = "Wheelchair")
+	bool IsLocationInApproachArea(const FVector& WorldLocation, float ExtraTolerance = 0.0f) const;
+
+	/** Distance score to the exact seat target; lower is a better candidate. */
+	float GetSeatDistanceSquared(const FVector& WorldLocation) const;
 
 	// ============================================================
 	// Events
@@ -79,6 +86,10 @@ protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Wheelchair")
 	TObjectPtr<UBoxComponent> SeatZone;
 
+	/** Broad zone that immediately recognizes an approaching carried patient. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Wheelchair")
+	TObjectPtr<UBoxComponent> ApproachZone;
+
 	/** Exact pelvis position; final facing follows chair forward with skeletal-axis calibration. */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Wheelchair")
 	TObjectPtr<USceneComponent> SeatTarget;
@@ -86,6 +97,18 @@ protected:
 	/** How close the patient must be to the target (cm) */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Wheelchair|Config", meta = (ClampMin = "5.0"))
 	float AcceptanceRadius_Config = 30.0f;
+
+	/** Half-size of the broad chair-recognition box, in chair-local centimetres. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Wheelchair|Detection")
+	FVector ApproachZoneExtent = FVector(90.0f, 75.0f, 80.0f);
+
+	/** Half-size of the final release/seat-commit box, in chair-local centimetres. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Wheelchair|Detection")
+	FVector SeatCommitZoneExtent = FVector(55.0f, 50.0f, 55.0f);
+
+	/** Show the recognition boxes while playing for placement and tuning. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Wheelchair|Detection")
+	bool bShowDetectionZones = false;
 
 	/** Maximum velocity the patient can have when seating (cm/s) — too fast = crash */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Wheelchair|Config", meta = (ClampMin = "0.0"))

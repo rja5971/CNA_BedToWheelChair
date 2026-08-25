@@ -92,7 +92,7 @@ bool UGrabComponent::TryGrabRagdoll()
 	}
 
 	// Activate the physics handle
-	if (PhysicsHandle)
+	if (PhysicsHandle && Grabbable->ShouldUsePhysicsHandle())
 	{
 		// We ALWAYS want rotational stiffness now!
 		// For the Belt (true), it matches the wrist. 

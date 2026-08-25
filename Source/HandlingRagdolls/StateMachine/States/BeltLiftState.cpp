@@ -50,7 +50,7 @@ void UBeltLiftState::TickState(float DeltaTime)
 		const FVector PelvisPos = Patient->GetPelvisLocation();
 		for (TActorIterator<AWheelchairActor> It(OwningStateMachine->GetWorld()); It; ++It)
 		{
-			if (It->IsLocationInSeatArea(PelvisPos))
+			if (It->IsReadyToReceive() && It->IsLocationInSeatArea(PelvisPos))
 			{
 				bLiftComplete = true;
 				UE_LOG(LogTemp, Log, TEXT("BeltLift: Final handle released inside %s; advancing to seating."),
@@ -77,7 +77,8 @@ void UBeltLiftState::TickState(float DeltaTime)
 			bLiftComplete = true;
 		}
 
-		// Reaching any wheelchair is also a valid completion of the lift phase.
+		// Entering a ready wheelchair's broad approach zone is also a valid
+		// completion of the lift phase. The next state latches the exact chair.
 		// This prevents the workflow from remaining stuck in BeingLifted when the
 		// nurse performs a shorter but otherwise valid bed-to-chair transfer.
 		if (!bLiftComplete)
@@ -87,7 +88,7 @@ void UBeltLiftState::TickState(float DeltaTime)
 				AWheelchairActor* Chair = *It;
 				const float SeatDistance = FVector::Dist(
 					PelvisPos, Chair->GetTargetSeatTransform().GetLocation());
-				if (SeatDistance <= Chair->GetAcceptanceRadius())
+				if (Chair->IsReadyToReceive() && Chair->IsLocationInApproachArea(PelvisPos))
 				{
 					bLiftComplete = true;
 					UE_LOG(LogTemp, Log, TEXT("BeltLift: Patient reached %s at %.1f cm; advancing to wheelchair transfer."),

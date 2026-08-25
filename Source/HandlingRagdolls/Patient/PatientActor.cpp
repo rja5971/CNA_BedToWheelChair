@@ -6,6 +6,7 @@
 #include "../Components/PatientPhysicsComponent.h"
 #include "../Components/SeatedTransitionComponent.h"
 #include "../Components/CooperationRampComponent.h"
+#include "../Components/PatientCarryComponent.h"
 #include "PatientStateConfig.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "PhysicsEngine/PhysicalAnimationComponent.h"
@@ -37,6 +38,7 @@ APatientActor::APatientActor()
 
 	// Create the cooperation ramp component (owns progressive aliveness during fold-up)
 	CooperationRamp = CreateDefaultSubobject<UCooperationRampComponent>(TEXT("CooperationRamp"));
+	PatientCarry = CreateDefaultSubobject<UPatientCarryComponent>(TEXT("PatientCarry"));
 
 	// Default grabbable roles (resolved to bone names at runtime via BoneMapping).
 	// NOTE: These must correspond to bones that have PHYSICS BODIES in the physics
@@ -100,6 +102,10 @@ void APatientActor::BeginPlay()
 	{
 		CooperationRamp->Initialize(PatientPhysics, BoneMapping);
 	}
+	if (PatientCarry)
+	{
+		PatientCarry->Initialize(PatientMesh, PatientPhysics);
+	}
 
 	// State data is authoritative, including at startup. Do not bypass the
 	// initial state's anchored/stiff/free rules with a global limp test mode.
@@ -122,7 +128,10 @@ void APatientActor::Tick(float DeltaTime)
 	Super::Tick(DeltaTime);
 
 	// Continuously monitor spine stress
-	UpdateSpineStress(DeltaTime);
+	if (!IsKinematicCarryActive())
+	{
+		UpdateSpineStress(DeltaTime);
+	}
 
 	// During the bed sit-up, the patient remains physics-driven until the torso
 	// crosses the upright threshold. At that point SetPatientState(Seated) applies
@@ -433,6 +442,14 @@ void APatientActor::SetPatientState(EPatientState NewState)
 		CurrentState = NewState;
 		OnPatientStateChanged.Broadcast(NewState);
 
+		// Carry animation owns every body. Record task-state changes without letting
+		// lifted/transfer configs re-enable physics underneath the kinematic pose.
+		if (IsKinematicCarryActive()
+			&& (NewState == EPatientState::BeingLifted || NewState == EPatientState::BeingTransferred))
+		{
+			return;
+		}
+
 		// --- DATA-DRIVEN PATH ---
 		// If a state config exists for this state, apply it (Anchored/Stiff/Free
 		// per bone group). This is the preferred, designer-editable path.
@@ -550,8 +567,38 @@ UPhysicalAnimationComponent* APatientActor::GetPhysicalAnimationComponent() cons
 bool APatientActor::BeginSeatedTransitionAt(const FTransform& SeatTarget)
 {
 	if (!SeatedTransition || SeatedTransition->IsSeatedLocked()) return false;
+	if (PatientCarry)
+	{
+		PatientCarry->PrepareForSeating();
+	}
 	SeatedTransition->BeginSeatedBlendToTarget(SeatTarget);
 	return SeatedTransition->IsSettling() || SeatedTransition->IsSeatedLocked();
+}
+
+bool APatientActor::IsKinematicCarryActive() const
+{
+	return PatientCarry && PatientCarry->IsCarryActive();
+}
+
+bool APatientActor::CanUseKinematicCarry() const
+{
+	return PatientCarry && PatientCarry->CanUseKinematicCarry();
+}
+
+void APatientActor::RestorePhysicsAfterKinematicCarry()
+{
+	if (!PatientMesh || !PatientPhysics) return;
+	PatientMesh->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+	if (UPatientStateConfig* Config = FindStateConfig(CurrentState))
+	{
+		PatientPhysics->ApplyStateConfig(Config);
+	}
+	else
+	{
+		PatientMesh->SetAllBodiesSimulatePhysics(true);
+		PatientMesh->WakeAllRigidBodies();
+		PatientPhysics->ApplyProfile(EPhysicalAnimProfile::Limp);
+	}
 }
 
 // ============================================================
