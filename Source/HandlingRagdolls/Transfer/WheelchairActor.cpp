@@ -50,6 +50,24 @@ AWheelchairActor::AWheelchairActor()
 	SeatTarget = CreateDefaultSubobject<USceneComponent>(TEXT("SeatTarget"));
 	SeatTarget->SetupAttachment(RootComponent);
 	SeatTarget->SetRelativeLocation(FVector(0.0f, 0.0f, 50.0f));
+
+	// Designer-editable rig markers. These defaults are only a useful starting
+	// point for a conventional Unreal chair whose forward axis is +X.
+	LeftFootTarget = CreateDefaultSubobject<USceneComponent>(TEXT("LeftFootTarget"));
+	LeftFootTarget->SetupAttachment(RootComponent);
+	LeftFootTarget->SetRelativeLocation(FVector(45.0f, -18.0f, 20.0f));
+
+	RightFootTarget = CreateDefaultSubobject<USceneComponent>(TEXT("RightFootTarget"));
+	RightFootTarget->SetupAttachment(RootComponent);
+	RightFootTarget->SetRelativeLocation(FVector(45.0f, 18.0f, 20.0f));
+
+	LeftKneeTarget = CreateDefaultSubobject<USceneComponent>(TEXT("LeftKneeTarget"));
+	LeftKneeTarget->SetupAttachment(RootComponent);
+	LeftKneeTarget->SetRelativeLocation(FVector(35.0f, -22.0f, 48.0f));
+
+	RightKneeTarget = CreateDefaultSubobject<USceneComponent>(TEXT("RightKneeTarget"));
+	RightKneeTarget->SetupAttachment(RootComponent);
+	RightKneeTarget->SetRelativeLocation(FVector(35.0f, 22.0f, 48.0f));
 }
 
 void AWheelchairActor::BeginPlay()
@@ -131,6 +149,26 @@ bool AWheelchairActor::IsLocationInApproachArea(const FVector& WorldLocation, fl
 float AWheelchairActor::GetSeatDistanceSquared(const FVector& WorldLocation) const
 {
 	return FVector::DistSquared(WorldLocation, GetTargetSeatTransform().GetLocation());
+}
+
+FTransform AWheelchairActor::GetLeftFootTargetTransform() const
+{
+	return LeftFootTarget ? LeftFootTarget->GetComponentTransform() : GetActorTransform();
+}
+
+FTransform AWheelchairActor::GetRightFootTargetTransform() const
+{
+	return RightFootTarget ? RightFootTarget->GetComponentTransform() : GetActorTransform();
+}
+
+FTransform AWheelchairActor::GetLeftKneeTargetTransform() const
+{
+	return LeftKneeTarget ? LeftKneeTarget->GetComponentTransform() : GetActorTransform();
+}
+
+FTransform AWheelchairActor::GetRightKneeTargetTransform() const
+{
+	return RightKneeTarget ? RightKneeTarget->GetComponentTransform() : GetActorTransform();
 }
 
 void AWheelchairActor::OnTransferBegin(AActor* Patient)

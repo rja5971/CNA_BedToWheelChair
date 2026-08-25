@@ -10,6 +10,8 @@
 class UAnimSequence;
 class USkeletalMeshComponent;
 class UPatientPhysicsComponent;
+class UAnimInstance;
+class AWheelchairActor;
 
 /** Broadcast when the physics-to-animation handoff has completed. */
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnSeatedReached);
@@ -45,7 +47,11 @@ public:
 
 	/** Immediately hand animation control to the chair pose and align its pelvis to the seat target. */
 	UFUNCTION(BlueprintCallable, Category = "Seated Transition")
-	void BeginSeatedBlendToTarget(const FTransform& SeatTarget);
+	void BeginSeatedBlendToTarget(const FTransform& SeatTarget, AWheelchairActor* Wheelchair = nullptr);
+
+	/** Chair supplying the active footrest and knee IK markers. */
+	UFUNCTION(BlueprintPure, Category = "Seated Transition|IK")
+	AWheelchairActor* GetTargetWheelchair() const { return TargetWheelchair.Get(); }
 
 	/** Legacy/manual escape hatch for already seated actors. */
 	UFUNCTION(BlueprintCallable, Category = "Seated Transition")
@@ -72,6 +78,17 @@ public:
 	/** Animation that becomes the final seated idle pose. Must use the patient's skeleton. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Seated Transition|Animation")
 	TObjectPtr<UAnimSequence> SeatedAnimation;
+
+	/** Optional seated Anim Blueprint. If unset, seating uses the legacy single-node animation. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Seated Transition|Animation")
+	TSubclassOf<UAnimInstance> SeatedAnimClass;
+
+	/**
+	 * Enables the experimental foot-target Anim Blueprint path. Disabled by
+	 * default so the validated single-node seated animation remains active.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Seated Transition|Animation")
+	bool bEnableSeatedFootIK = false;
 
 	/** Total time used to hand control from physics to animation. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Seated Transition|Animation", meta = (ClampMin = "0.1"))
@@ -114,6 +131,7 @@ private:
 	bool bHasSeatTarget = false;
 	float BlendElapsed = 0.0f;
 	FTransform TargetSeatTransform = FTransform::Identity;
+	TWeakObjectPtr<AWheelchairActor> TargetWheelchair;
 
 	UPROPERTY()
 	TObjectPtr<USkeletalMeshComponent> Mesh;

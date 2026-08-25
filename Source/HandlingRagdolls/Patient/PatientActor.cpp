@@ -564,14 +564,14 @@ UPhysicalAnimationComponent* APatientActor::GetPhysicalAnimationComponent() cons
 	return PatientPhysics ? PatientPhysics->GetPhysicalAnimationComponent() : nullptr;
 }
 
-bool APatientActor::BeginSeatedTransitionAt(const FTransform& SeatTarget)
+bool APatientActor::BeginSeatedTransitionAt(const FTransform& SeatTarget, AWheelchairActor* Wheelchair)
 {
 	if (!SeatedTransition || SeatedTransition->IsSeatedLocked()) return false;
 	if (PatientCarry)
 	{
 		PatientCarry->PrepareForSeating();
 	}
-	SeatedTransition->BeginSeatedBlendToTarget(SeatTarget);
+	SeatedTransition->BeginSeatedBlendToTarget(SeatTarget, Wheelchair);
 	return SeatedTransition->IsSettling() || SeatedTransition->IsSeatedLocked();
 }
 

@@ -23,6 +23,7 @@ class UPatientStateConfig;
 class USeatedTransitionComponent;
 class UCooperationRampComponent;
 class UPatientCarryComponent;
+class AWheelchairActor;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnPatientStateChanged, EPatientState, NewState);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnPatientInjured);
@@ -152,7 +153,7 @@ public:
 	void RestorePhysicsAfterKinematicCarry();
 
 	UFUNCTION(BlueprintCallable, Category = "Patient|Seated Transition")
-	bool BeginSeatedTransitionAt(const FTransform& SeatTarget);
+	bool BeginSeatedTransitionAt(const FTransform& SeatTarget, AWheelchairActor* Wheelchair = nullptr);
 
 	/** Check if neck is currently being supported */
 	UFUNCTION(BlueprintCallable, Category = "Patient")

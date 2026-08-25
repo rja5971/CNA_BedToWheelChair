@@ -156,7 +156,7 @@ void UWheelchairTransferState::TickState(float DeltaTime)
 		Wheelchair->OnTransferBegin(PatientActor);
 
 		APatientActor* ConcretePatient = OwningStateMachine->GetPatient();
-		if (ConcretePatient && ConcretePatient->BeginSeatedTransitionAt(SeatTransform))
+		if (ConcretePatient && ConcretePatient->BeginSeatedTransitionAt(SeatTransform, Wheelchair))
 		{
 			ActiveWheelchair = Wheelchair;
 			bSeatingTransitionStarted = true;

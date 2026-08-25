@@ -8,6 +8,7 @@
 #include "WheelchairActor.generated.h"
 
 class UBoxComponent;
+class USceneComponent;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnWheelchairTransferComplete);
 
@@ -70,6 +71,19 @@ public:
 	/** Distance score to the exact seat target; lower is a better candidate. */
 	float GetSeatDistanceSquared(const FVector& WorldLocation) const;
 
+	/** World-space IK markers used by the seated patient animation graph. */
+	UFUNCTION(BlueprintPure, Category = "Wheelchair|Seated IK")
+	FTransform GetLeftFootTargetTransform() const;
+
+	UFUNCTION(BlueprintPure, Category = "Wheelchair|Seated IK")
+	FTransform GetRightFootTargetTransform() const;
+
+	UFUNCTION(BlueprintPure, Category = "Wheelchair|Seated IK")
+	FTransform GetLeftKneeTargetTransform() const;
+
+	UFUNCTION(BlueprintPure, Category = "Wheelchair|Seated IK")
+	FTransform GetRightKneeTargetTransform() const;
+
 	// ============================================================
 	// Events
 	// ============================================================
@@ -93,6 +107,20 @@ protected:
 	/** Exact pelvis position; final facing follows chair forward with skeletal-axis calibration. */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Wheelchair")
 	TObjectPtr<USceneComponent> SeatTarget;
+
+	/** Left/right foot placement markers. Position these on the wheelchair footrests. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Wheelchair|Seated IK")
+	TObjectPtr<USceneComponent> LeftFootTarget;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Wheelchair|Seated IK")
+	TObjectPtr<USceneComponent> RightFootTarget;
+
+	/** Knee pole markers that keep each leg bending forward instead of flipping. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Wheelchair|Seated IK")
+	TObjectPtr<USceneComponent> LeftKneeTarget;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Wheelchair|Seated IK")
+	TObjectPtr<USceneComponent> RightKneeTarget;
 
 	/** How close the patient must be to the target (cm) */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Wheelchair|Config", meta = (ClampMin = "5.0"))

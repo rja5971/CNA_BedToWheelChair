@@ -2,11 +2,13 @@
 
 #include "SeatedTransitionComponent.h"
 #include "PatientPhysicsComponent.h"
+#include "Animation/AnimInstance.h"
 #include "Animation/AnimSequence.h"
 #include "Animation/Skeleton.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Engine/SkeletalMesh.h"
 #include "UObject/ConstructorHelpers.h"
+#include "../Transfer/WheelchairActor.h"
 
 USeatedTransitionComponent::USeatedTransitionComponent()
 {
@@ -15,10 +17,17 @@ USeatedTransitionComponent::USeatedTransitionComponent()
 	PrimaryComponentTick.TickGroup = TG_PostPhysics;
 
 	static ConstructorHelpers::FObjectFinder<UAnimSequence> DefaultSeatedAnimation(
-		TEXT("/Game/Animations/AN_Patient_Sitting.AN_Patient_Sitting"));
+		TEXT("/Game/Animations/SittingIdle_1__UE.SittingIdle_1__UE"));
 	if (DefaultSeatedAnimation.Succeeded())
 	{
 		SeatedAnimation = DefaultSeatedAnimation.Object;
+	}
+
+	static ConstructorHelpers::FClassFinder<UAnimInstance> DefaultSeatedAnimClass(
+		TEXT("/Game/Animations/ABP_Patient_SeatedIK"));
+	if (DefaultSeatedAnimClass.Succeeded())
+	{
+		SeatedAnimClass = DefaultSeatedAnimClass.Class;
 	}
 }
 
@@ -90,8 +99,9 @@ void USeatedTransitionComponent::BeginSeatedSettle()
 	StartBlend(nullptr);
 }
 
-void USeatedTransitionComponent::BeginSeatedBlendToTarget(const FTransform& SeatTarget)
+void USeatedTransitionComponent::BeginSeatedBlendToTarget(const FTransform& SeatTarget, AWheelchairActor* Wheelchair)
 {
+	TargetWheelchair = Wheelchair;
 	SnapToAnimationAtTarget(SeatTarget);
 }
 
@@ -107,6 +117,7 @@ void USeatedTransitionComponent::ResetTransition()
 	bSeatedLocked = false;
 	bBlending = false;
 	bHasSeatTarget = false;
+	TargetWheelchair.Reset();
 	BlendElapsed = 0.0f;
 	SetComponentTickEnabled(false);
 	if (Mesh)
@@ -137,11 +148,18 @@ void USeatedTransitionComponent::StartBlend(const FTransform* SeatTarget)
 
 	PhysicsComp->ClearHeldPose();
 	Mesh->VisibilityBasedAnimTickOption = EVisibilityBasedAnimTickOption::AlwaysTickPoseAndRefreshBones;
-	Mesh->SetAnimationMode(EAnimationMode::AnimationSingleNode);
-	Mesh->SetAnimation(SeatedAnimation);
-	Mesh->SetPosition(0.0f);
-	Mesh->SetPlayRate(1.0f);
-	Mesh->Play(bLoopSeatedAnimation);
+	if (bEnableSeatedFootIK && SeatedAnimClass)
+	{
+		Mesh->SetAnimInstanceClass(SeatedAnimClass);
+	}
+	else
+	{
+		Mesh->SetAnimationMode(EAnimationMode::AnimationSingleNode);
+		Mesh->SetAnimation(SeatedAnimation);
+		Mesh->SetPosition(0.0f);
+		Mesh->SetPlayRate(1.0f);
+		Mesh->Play(bLoopSeatedAnimation);
+	}
 
 	PhysicsComp->ApplyProfile(EPhysicalAnimProfile::Seated);
 	ApplyPhysicsBlend(0.0f, 0.0f);
@@ -187,11 +205,18 @@ void USeatedTransitionComponent::SnapToAnimationAtTarget(const FTransform& SeatT
 	// in this frame instead of allowing the former ragdoll pose to blend.
 	PhysicsComp->ClearHeldPose();
 	Mesh->VisibilityBasedAnimTickOption = EVisibilityBasedAnimTickOption::AlwaysTickPoseAndRefreshBones;
-	Mesh->SetAnimationMode(EAnimationMode::AnimationSingleNode);
-	Mesh->SetAnimation(SeatedAnimation);
-	Mesh->SetPlayRate(1.0f);
-	Mesh->Play(bLoopSeatedAnimation);
-	Mesh->SetPosition(0.0f);
+	if (bEnableSeatedFootIK && SeatedAnimClass)
+	{
+		Mesh->SetAnimInstanceClass(SeatedAnimClass);
+	}
+	else
+	{
+		Mesh->SetAnimationMode(EAnimationMode::AnimationSingleNode);
+		Mesh->SetAnimation(SeatedAnimation);
+		Mesh->SetPlayRate(1.0f);
+		Mesh->Play(bLoopSeatedAnimation);
+		Mesh->SetPosition(0.0f);
+	}
 	ApplyPhysicsBlend(1.0f, 1.0f);
 	Mesh->SetAllBodiesSimulatePhysics(false);
 	Mesh->SetSimulatePhysics(false);

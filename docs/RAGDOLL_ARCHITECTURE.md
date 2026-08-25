@@ -58,6 +58,7 @@ The patient was refactored from a 700-line god class into focused components (SR
 | `USeatedTransitionComponent` | Bed sit detection plus targeted physics-to-animation wheelchair handoff |
 | `UCooperationRampComponent` | Progressive muscle engagement during fold-up (curve-driven) |
 | `UPatientCarryComponent` | Fully kinematic carry animation, averaged hand following, headset-facing yaw, release recovery |
+| `UPatientSeatedAnimInstance` | Converts the active chair's foot and knee markers into mesh component space and blends seated IK |
 | `UGrabComponent` | VR hand physics-handle grab (via IGrabbable) |
 | `USpineMonitorComponent` | Observes ISpineMonitorable, fires stress events |
 
@@ -70,11 +71,25 @@ belt handle follows the active hand anchor, and the upright patient billboard-ya
 toward the headset without inheriting wrist rotation. The previous physics path is
 retained as an asset-validation fallback. Once the patient is released inside a
 latched ready wheelchair's oriented `SeatZone`, the animated pelvis
-snaps exactly to that chair's `SeatTarget`, and `/Game/Animations/AN_Patient_Sitting`
+snaps exactly to that chair's `SeatTarget`, and `/Game/Animations/SittingIdle_1__UE`
 takes full control in the same frame. `SeatTarget` supplies the pelvis position;
 the wheelchair actor supplies final facing. A calibrated `-180°` yaw compensates
 for the imported patient's opposite skeletal forward axis, so a rotated target
 component cannot seat the patient backward.
+
+For the seated footrest pass, `AWheelchairActor` owns `LeftFootTarget`,
+`RightFootTarget`, `LeftKneeTarget`, and `RightKneeTarget` scene components.
+`USeatedTransitionComponent` retains the selected chair through the animation
+handoff. `UPatientSeatedAnimInstance` reads that chair each animation tick,
+converts all four world positions into patient mesh component space, and exposes
+them with `FootIKAlpha` to `/Game/Animations/ABP_Patient_SeatedIK`. The intended
+AnimGraph order is seated sequence, Local To Component, left Two Bone IK, right
+Two Bone IK, Component To Local, output. Knee poles prevent leg flipping and IK
+does not stretch unreachable legs. The alpha interpolates on only after the chair
+is locked, avoiding a visible snap during the pelvis alignment frame.
+The path is currently dormant: `USeatedTransitionComponent::bEnableSeatedFootIK`
+defaults to false, preserving the validated single-node seated animation while the
+targets and animation bridge remain available for later work.
 
 Direct patient grabbing is state-gated. `LyingDown`, `BeingSupported`, and bed
 `Seated` accept only configured neck-support bones; generic physics bodies cannot
