@@ -538,9 +538,13 @@ void APatientActor::SetPatientState(EPatientState NewState)
 		{
 			// The patient is now fully animation driven (e.g. BeltAttached, BeingLifted).
 			// Do not re-enable physics configs or profiles. Just trigger behavioral hooks.
-			if (NewState == EPatientState::Seated && SeatedTransition)
+						if (NewState == EPatientState::Seated && SeatedTransition)
 			{
-				SeatedTransition->BeginSeatedSettle();
+				// Only trigger the bed seated settle if the wheelchair transition isn't already handling it
+				if (!SeatedTransition->HasSeatTarget() && !SeatedTransition->IsSeatedLocked())
+				{
+					SeatedTransition->BeginSeatedSettle();
+				}
 			}
 			return;
 		}
@@ -881,6 +885,7 @@ bool APatientActor::BoneMatchesAnyRole(FName BoneName, const TArray<EPatientBone
 }
 
 // End of PatientActor implementation
+
 
 
 

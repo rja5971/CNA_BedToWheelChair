@@ -16,6 +16,9 @@ class AWheelchairActor;
 /** Broadcast when the physics-to-animation handoff has completed. */
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnSeatedReached);
 
+/** Broadcast when the bed seated blend finishes and physics is fully disabled. */
+DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnBedSeatedBlendComplete);
+
 /** Handles the bed settle and the final chair animation handoff. */
 UCLASS(ClassGroup = (PatientCare), meta = (BlueprintSpawnableComponent))
 class HANDLINGRAGDOLLS_API USeatedTransitionComponent : public UActorComponent
@@ -36,6 +39,9 @@ public:
 
 	/** Angle of the torso from vertical (lying ~= 90, upright ~= 0). */
 	UFUNCTION(BlueprintCallable, Category = "Seated Transition")
+		/** Check if a seat target has been acquired */
+	bool HasSeatTarget() const { return bHasSeatTarget; }
+
 	float GetTorsoUprightAngleDeg() const;
 
 	/** Returns true on the frame the patient first crosses the seated threshold. */
@@ -74,6 +80,28 @@ public:
 
 	UPROPERTY(BlueprintAssignable, Category = "Seated Transition|Events")
 	FOnSeatedReached OnSettleCancelled;
+
+	/** Broadcast when the bed seated blend finishes and physics is fully disabled. */
+	UPROPERTY(BlueprintAssignable, Category = "Seated Transition|Events")
+	FOnBedSeatedBlendComplete OnBedSeatedBlendComplete;
+
+	/** Returns true after the bed blend has fully completed and physics is off. */
+	UFUNCTION(BlueprintPure, Category = "Seated Transition")
+	bool IsBedSeatedFinalized() const { return bBedSeatedFinalized; }
+
+	/**
+	 * Animation used when the patient sits up on the bed.
+	 * If null, falls back to SeatedAnimation.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Seated Transition|Animation")
+	TObjectPtr<UAnimSequence> BedSeatedAnimation;
+
+	/**
+	 * When true, the bed blend completion will fully disable physics simulation,
+	 * leaving the patient entirely animation-controlled on the bed.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Seated Transition|Animation")
+	bool bDisablePhysicsAfterBedBlend = true;
 
 	/** Animation that becomes the final seated idle pose. Must use the patient's skeleton. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Seated Transition|Animation")
@@ -124,11 +152,13 @@ private:
 	void CompleteBlend();
 	void AlignAnimationToSeatTarget();
 	void CancelBlend();
+	void FinalizeBedSeatedBlend();
 	FName ResolveBoneName(EPatientBoneRole BoneRole) const;
 
 	bool bSeatedLocked = false;
 	bool bBlending = false;
 	bool bHasSeatTarget = false;
+	bool bBedSeatedFinalized = false;
 	float BlendElapsed = 0.0f;
 	FTransform TargetSeatTransform = FTransform::Identity;
 	TWeakObjectPtr<AWheelchairActor> TargetWheelchair;
@@ -142,3 +172,4 @@ private:
 	UPROPERTY()
 	TObjectPtr<UPatientPhysicsComponent> PhysicsComp;
 };
+
