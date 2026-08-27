@@ -27,13 +27,14 @@ void UGrabComponent::BeginPlay()
 		PhysicsHandle->AngularDamping = GrabAngularDamping;
 		PhysicsHandle->InterpolationSpeed = GrabInterpolationSpeed;
 	}
+
+
 }
 
 void UGrabComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 
-	// Keep the physics handle target updated to follow the hand
 	if (IsGrabbing())
 	{
 		UpdateGrabTarget();
@@ -94,11 +95,11 @@ bool UGrabComponent::TryGrabRagdoll()
 	// Activate the physics handle
 	if (PhysicsHandle && Grabbable->ShouldUsePhysicsHandle())
 	{
-		// We ALWAYS want rotational stiffness now!
-		// For the Belt (true), it matches the wrist. 
-		// For the Patient (false), it will be mathematically forced to face the player in Tick.
+		PhysicsHandle->SetLinearStiffness(GrabLinearStiffness);
+		PhysicsHandle->SetLinearDamping(GrabLinearDamping);
 		PhysicsHandle->SetAngularStiffness(GrabAngularStiffness);
 		PhysicsHandle->SetAngularDamping(GrabAngularDamping);
+		PhysicsHandle->SetInterpolationSpeed(GrabInterpolationSpeed);
 
 		PhysicsHandle->GrabComponentAtLocationWithRotation(
 			GrabbableComp,
@@ -304,3 +305,5 @@ void UGrabComponent::UpdateGrabTarget()
 
 	PhysicsHandle->SetTargetLocationAndRotation(TargetLocation, TargetRotation);
 }
+
+

@@ -27,6 +27,10 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "VR Locomotion")
 	float ContinuousTurnSpeed;
 
+	// Multiplier for smooth movement speed
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "VR Locomotion")
+	float MovementSpeedMultiplier;
+
 	// --- FUNCTIONS TO USE IN BLUEPRINTS ---
 
 	/*

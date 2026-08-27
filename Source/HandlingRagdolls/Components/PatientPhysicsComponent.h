@@ -126,6 +126,20 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Patient Physics")
 	void ApplyRestPose();
 
+	/**
+	 * Temporarily reduce mass on upper-body bones while the patient is being
+	 * grabbed. This makes the physics handle able to pull the patient up from
+	 * lying without the "pulling a thread" lag.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Patient Physics")
+	void ApplyGrabMassReduction();
+
+	/**
+	 * Restore original mass after the grab ends.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Patient Physics")
+	void RestoreGrabMass();
+
 	// ============================================================
 	// Pivot Rotation Control
 	// ============================================================
@@ -176,6 +190,14 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Patient Physics|Damping", meta = (ClampMin = "0.0", ClampMax = "20.0"))
 	float BodyAngularDamping = 2.5f;
 
+	/**
+	 * Mass scale multiplier applied to upper-body bones while the patient is
+	 * being grabbed. Lower values make the patient easier to pull up.
+	 * 1.0 = no change, 0.3 = 30% of original mass.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Patient Physics|Mass", meta = (ClampMin = "0.05", ClampMax = "1.0"))
+	float GrabMassScale = 0.1f;
+
 	/** Rest pose animation (frozen target for physical animation motors) */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Patient Physics|Animation")
 	TObjectPtr<UAnimSequence> RestPoseAnimation;
@@ -201,6 +223,10 @@ private:
 	bool bDiagLogging = false;
 	float DiagElapsed = 0.0f;
 	int32 DiagFrame = 0;
+
+	// --- Grab mass reduction state ---
+	bool bGrabMassReduced = false;
+	TMap<FName, float> OriginalMassScales;
 
 	// --- Pose hold (freeze anchored bones at their captured world transforms) ---
 	// The pelvis becomes kinematic when Anchored. Other anchored bodies remain

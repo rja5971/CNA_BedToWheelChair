@@ -11,6 +11,7 @@ UVRLocomotionSettings::UVRLocomotionSettings()
 	bUseSnapTurn = true;
 	bUseTeleport = true;
 	ContinuousTurnSpeed = 45.0f;
+	MovementSpeedMultiplier = 0.5f; // Default to half speed, since they want it decreased
 	bHasSnapTurned = false;
 }
 
@@ -50,8 +51,8 @@ void UVRLocomotionSettings::ApplySmoothMove(APawn* Pawn, FVector2D AxisValue, FV
 	if (!Pawn || bUseTeleport) return; // Don't apply smooth move if teleport is active
 
 	// Add forward/backward movement
-	Pawn->AddMovementInput(ForwardDirection, AxisValue.Y);
+	Pawn->AddMovementInput(ForwardDirection, AxisValue.Y * MovementSpeedMultiplier);
 
 	// Add left/right movement
-	Pawn->AddMovementInput(RightDirection, AxisValue.X);
+	Pawn->AddMovementInput(RightDirection, AxisValue.X * MovementSpeedMultiplier);
 }

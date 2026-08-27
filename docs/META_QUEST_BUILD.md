@@ -4,9 +4,8 @@
 
 The next deliverable is a Meta Quest APK for client review. The build should retain
 the VR-tested patient-transfer flow and avoid introducing new gameplay changes
-during packaging work. Experimental seated foot IK remains implemented but disabled
-through `USeatedTransitionComponent::bEnableSeatedFootIK = false`; chair seating uses
-the validated `/Game/Animations/SittingIdle_1__UE` single-node path.
+during packaging work. Chair seating uses the validated
+`/Game/Animations/SittingIdle_1__UE` single-node path without a seated AnimBlueprint.
 
 ## Current project configuration
 
@@ -52,7 +51,7 @@ must still be validated on the build machine before packaging.
 - The patient remains upright and faces the headset during belt carry.
 - The wheelchair is recognized immediately inside its approach area.
 - Final handle release inside the seat zone seats the patient once.
-- `SittingIdle_1__UE` owns the final seated pose; experimental foot IK stays off.
+- `SittingIdle_1__UE` directly owns the final seated pose.
 - UI text is readable and required audio/media assets load on device.
 - Frame pacing, thermal behavior, and memory remain acceptable for the full flow.
 - Relaunching the installed APK repeats the flow without requiring editor state.

@@ -676,6 +676,42 @@ void UPatientPhysicsComponent::ApplyBodyDamping()
 		BodyLinearDamping, BodyAngularDamping);
 }
 
+void UPatientPhysicsComponent::ApplyGrabMassReduction()
+{
+	if (!Mesh) return;
+
+	// TEMPORARILY DISABLE MOTORS SO WE CAN PULL THEM EASILY
+	// If the spine is "Stiff", its motor pushes back with 2000 strength, which completely
+	// overrides the physics handle. We make the body completely limp while grabbed
+	// so it bends effortlessly at the waist.
+	if (PhysicalAnimation)
+	{
+		FName DefaultRootBone = ResolveBoneName(EPatientBoneRole::Pelvis);
+		if (!DefaultRootBone.IsNone())
+		{
+			FPhysicalAnimationData LimpData;
+			LimpData.bIsLocalSimulation = true;
+			LimpData.OrientationStrength = 0.0f;
+			LimpData.AngularVelocityStrength = 0.0f;
+			LimpData.PositionStrength = 0.0f;
+			LimpData.VelocityStrength = 0.0f;
+			LimpData.MaxAngularForce = 0.0f;
+			LimpData.MaxLinearForce = 0.0f;
+			
+			PhysicalAnimation->ApplyPhysicalAnimationSettingsBelow(DefaultRootBone, LimpData);
+		}
+	}
+
+	UE_LOG(LogTemp, Log, TEXT("PatientPhysics: Disabled motors for grab."));
+}
+
+void UPatientPhysicsComponent::RestoreGrabMass()
+{
+	if (!Mesh) return;
+
+	UE_LOG(LogTemp, Log, TEXT("PatientPhysics: Grab release cleanup called."));
+}
+
 void UPatientPhysicsComponent::ApplyRestPose()
 {
 	if (!Mesh) return;

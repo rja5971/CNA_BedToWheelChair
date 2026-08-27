@@ -96,11 +96,11 @@ protected:
 
 	/** Linear stiffness of the physics handle (how tightly it holds) */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Grab|Config", meta = (ClampMin = "0.0"))
-	float GrabLinearStiffness = 4000.0f;
+	float GrabLinearStiffness = 25000.0f;
 
 	/** Linear damping of the physics handle */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Grab|Config", meta = (ClampMin = "0.0"))
-	float GrabLinearDamping = 200.0f;
+	float GrabLinearDamping = 1000.0f;
 
 	/** Angular stiffness of the physics handle */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Grab|Config", meta = (ClampMin = "0.0"))
@@ -119,7 +119,23 @@ protected:
 
 	/** Interpolation speed for the physics handle target update */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Grab|Config", meta = (ClampMin = "0.0"))
-	float GrabInterpolationSpeed = 50.0f;
+	float GrabInterpolationSpeed = 150.0f;
+
+	/** 
+	 * When true, the physics handle target is clamped so the hand cannot sink
+	 * deeper than MaxHandPenetrationDepth past the grabbed bone's surface.
+	 * This prevents the VR hand from visually clipping deep into the patient.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grab|Clamp")
+	bool bClampHandToGrabSurface = true;
+
+	/** 
+	 * Maximum distance (cm) the physics handle target can penetrate past the
+	 * grabbed bone location toward the body interior. Smaller = hand stays
+	 * closer to the surface. 
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grab|Clamp", meta = (ClampMin = "0.0", EditCondition = "bClampHandToGrabSurface"))
+	float MaxHandPenetrationDepth = 5.0f;
 
 private:
 	/** Internal physics handle for smooth grabbing */

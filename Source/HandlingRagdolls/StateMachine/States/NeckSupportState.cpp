@@ -21,6 +21,20 @@ void UNeckSupportState::TickState(float DeltaTime)
 	IIPatient* Patient = OwningStateMachine->GetPatientInterface();
 	if (!Patient) return;
 
+	// Reaching the bed-seated/belt phase proves that neck support was performed.
+	// The bed handoff can release the physics grab before RequiredSupportDuration,
+	// so do not leave the task state machine stranded behind the actual workflow.
+	const EPatientState PatientState = Patient->GetPatientState();
+	if (Patient->HasBeltAttached()
+		|| PatientState == EPatientState::Seated
+		|| PatientState == EPatientState::BeltAttached
+		|| PatientState == EPatientState::BeingLifted
+		|| PatientState == EPatientState::BeingTransferred)
+	{
+		bSupportRequirementMet = true;
+		return;
+	}
+
 	// Check if neck is being supported
 	if (Patient->IsNeckSupported())
 	{

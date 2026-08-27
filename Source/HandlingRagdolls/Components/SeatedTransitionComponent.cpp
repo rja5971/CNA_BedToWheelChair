@@ -182,6 +182,10 @@ void USeatedTransitionComponent::MarkSeated()
 
 void USeatedTransitionComponent::ResetTransition()
 {
+	if (Mesh && TargetWheelchair.IsValid() && Mesh->GetAttachParent() == TargetWheelchair->GetSeatTargetComponent())
+	{
+		Mesh->DetachFromComponent(FDetachmentTransformRules::KeepWorldTransform);
+	}
 	bSeatedLocked = false;
 	bBlending = false;
 	bHasSeatTarget = false;
@@ -279,6 +283,11 @@ void USeatedTransitionComponent::SnapToAnimationAtTarget(const FTransform& SeatT
 	Mesh->RefreshBoneTransforms();
 
 	AlignAnimationToSeatTarget();
+	if (TargetWheelchair.IsValid() && TargetWheelchair->GetSeatTargetComponent())
+	{
+		Mesh->AttachToComponent(TargetWheelchair->GetSeatTargetComponent(),
+			FAttachmentTransformRules::KeepWorldTransform);
+	}
 	bSeatedLocked = true;
 
 	UE_LOG(LogTemp, Log, TEXT("SeatedTransition: Snapped directly to '%s' at the chair seat target."),

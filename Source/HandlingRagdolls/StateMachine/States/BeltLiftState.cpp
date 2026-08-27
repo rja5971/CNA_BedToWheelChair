@@ -37,6 +37,30 @@ void UBeltLiftState::TickState(float DeltaTime)
 	// Check if belt is being used to lift
 	bBeltIsBeingGrabbed = Belt->IsBeingLifted();
 
+	auto IsReleasedInsideReadyChair = [&]()
+	{
+		if (!Belt->HasPendingFinalHandleRelease()) return false;
+
+		const FVector PelvisPos = Patient->GetPelvisLocation();
+		for (TActorIterator<AWheelchairActor> It(OwningStateMachine->GetWorld()); It; ++It)
+		{
+			if (It->IsReadyToReceive() && It->IsLocationInSeatArea(PelvisPos))
+			{
+				UE_LOG(LogTemp, Log, TEXT("BeltLift: Pending final release found inside %s; advancing to seating."),
+					*It->GetName());
+				return true;
+			}
+		}
+		return false;
+	};
+
+	// The release can occur just before this state is entered. The belt keeps the
+	// request armed, so accept it without depending on a local grabbed->released edge.
+	if (!bLiftComplete && IsReleasedInsideReadyChair())
+	{
+		bLiftComplete = true;
+	}
+
 	if (bBeltIsBeingGrabbed && !bWasBeingGrabbed)
 	{
 		// Just grabbed! Free the pelvis.
@@ -47,17 +71,7 @@ void UBeltLiftState::TickState(float DeltaTime)
 	{
 		// Releasing inside any chair is an intentional seating handoff, even when
 		// the vertical lift-height requirement was not reached.
-		const FVector PelvisPos = Patient->GetPelvisLocation();
-		for (TActorIterator<AWheelchairActor> It(OwningStateMachine->GetWorld()); It; ++It)
-		{
-			if (It->IsReadyToReceive() && It->IsLocationInSeatArea(PelvisPos))
-			{
-				bLiftComplete = true;
-				UE_LOG(LogTemp, Log, TEXT("BeltLift: Final handle released inside %s; advancing to seating."),
-					*It->GetName());
-				break;
-			}
-		}
+		bLiftComplete = IsReleasedInsideReadyChair();
 
 		if (!bLiftComplete)
 		{

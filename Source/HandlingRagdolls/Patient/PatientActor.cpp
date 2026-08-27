@@ -694,12 +694,12 @@ bool APatientActor::CanUseKinematicCarry() const
 void APatientActor::RestorePhysicsAfterKinematicCarry()
 {
 	if (!PatientMesh || !PatientPhysics) return;
-	
-	if (bIsPureAnimationDriven)
-	{
-		UE_LOG(LogTemp, Log, TEXT("PatientActor: Skipped restoring physics after carry (pure animation driven)."));
-		return;
-	}
+
+	// The bed/carry workflow is animation-owned only until the carry is released.
+	// A valid chair handoff cancels this callback in PrepareForSeating; reaching
+	// this function therefore means the release was not accepted and physics must
+	// recover instead of leaving the patient frozen in the carry idle.
+	bIsPureAnimationDriven = false;
 
 	PatientMesh->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
 	if (UPatientStateConfig* Config = FindStateConfig(CurrentState))
