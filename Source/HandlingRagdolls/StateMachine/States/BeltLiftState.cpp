@@ -155,3 +155,4 @@ FText UBeltLiftState::GetInstructions() const
 		FMath::Clamp(CurrentLiftHeight / RequiredLiftHeight * 100.0f, 0.0f, 100.0f));
 	return FText::FromString(Progress);
 }
+

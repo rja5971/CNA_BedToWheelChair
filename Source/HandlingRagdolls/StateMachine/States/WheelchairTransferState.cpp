@@ -255,3 +255,4 @@ FText UWheelchairTransferState::GetInstructions() const
 	return FText::FromString(TEXT("Rotate the patient to face away from the wheelchair, then lower them into the seat."));
 }
 
+
