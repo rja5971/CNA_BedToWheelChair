@@ -498,9 +498,24 @@ float APatientActor::GetCurrentAngleDeviation(FName BoneName) const
 void APatientActor::SetPatientState(EPatientState NewState)
 {
 	// If the patient enters the seated state on the bed, we lock out physics permanently for the rest of the workflow.
-	if (NewState == EPatientState::Seated)
+		if (NewState == EPatientState::Seated)
 	{
 		bIsPureAnimationDriven = true;
+
+		// Force any holding VR hands to release! 
+		// If a Physics Handle continues to pull the patient after they become kinematic (animation-driven),
+		// the Physics Handle's constraint solver will explode and catapult the player/patient!
+				// Safely collect grabbers first to avoid modifying the map while iterating
+		TArray<UGrabComponent*> GrabbersToRelease;
+		for (auto& Pair : ActiveGrabbers)
+		{
+			if (Pair.Key) GrabbersToRelease.Add(Pair.Key);
+		}
+		for (UGrabComponent* Grabber : GrabbersToRelease)
+		{
+			Grabber->ReleaseRagdoll();
+		}
+		ActiveGrabbers.Empty();
 	}
 
 	if (NewState != EPatientState::Seated && SeatedTransition && SeatedTransition->IsSeatedLocked())
@@ -866,6 +881,8 @@ bool APatientActor::BoneMatchesAnyRole(FName BoneName, const TArray<EPatientBone
 }
 
 // End of PatientActor implementation
+
+
 
 
 

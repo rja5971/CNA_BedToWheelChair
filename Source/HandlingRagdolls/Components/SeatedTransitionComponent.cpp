@@ -109,10 +109,13 @@ void USeatedTransitionComponent::BeginSeatedSettle()
 		CapturedPelvis = Mesh->GetSocketTransform(PelvisBone);
 	}
 
-		// 2. Stop physics completely
+				// 2. Stop physics completely and switch to QueryOnly to prevent depenetration explosions
+	// If the new animated pose clips into the bed (e.g. legs hanging down through the mattress),
+	// the physics engine will violently eject the patient out of the map if collision is still active.
+	PhysicsComp->ClearHeldPose(); // MUST BE CALLED FIRST! ClearHeldPose might re-enable physics on Anchored bones.
 	Mesh->SetSimulatePhysics(false);
 	Mesh->SetAllBodiesSimulatePhysics(false);
-	PhysicsComp->ClearHeldPose();
+	Mesh->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
 
 	// CLEAR ROTATION: Force the mesh perfectly upright before the animation takes over.
 	// As requested, this clears the -90 X rotation (and any other Pitch/Roll) so the 
@@ -128,19 +131,32 @@ void USeatedTransitionComponent::BeginSeatedSettle()
 	Mesh->SetPlayRate(1.0f);
 	Mesh->Play(bLoopSeatedAnimation);
 
-	// 4. Align Mesh so the new Anim Pelvis matches the Captured physics Pelvis
+		// 4. Align Mesh so the new Anim Pelvis matches the Captured physics Pelvis
 	if (!PelvisBone.IsNone())
 	{
 		Mesh->TickAnimation(0.0f, false);
 		Mesh->RefreshBoneTransforms();
 
-		FVector AnimPelvisLoc = Mesh->GetSocketLocation(PelvisBone);
-		FVector LocDiff = CapturedPelvis.GetLocation() - AnimPelvisLoc;
-		Mesh->AddWorldOffset(LocDiff, false, nullptr, ETeleportType::TeleportPhysics);
-
+		// CORRECT ORDER: Rotate the mesh first, then update bones, then translate.
+		// If we translate first and then rotate, the Pelvis swings in a huge arc away from the target!
+				FVector StartLoc = Mesh->GetComponentLocation();
+		
 		FRotator AnimPelvisRot = Mesh->GetSocketRotation(PelvisBone);
 		float YawDiff = CapturedPelvis.Rotator().Yaw - AnimPelvisRot.Yaw;
 		Mesh->AddWorldRotation(FRotator(0.0f, YawDiff, 0.0f), false, nullptr, ETeleportType::TeleportPhysics);
+		
+		Mesh->RefreshBoneTransforms();
+
+		FVector AnimPelvisLoc = Mesh->GetSocketLocation(PelvisBone);
+		FVector LocDiff = CapturedPelvis.GetLocation() - AnimPelvisLoc;
+		Mesh->AddWorldOffset(LocDiff, false, nullptr, ETeleportType::TeleportPhysics);
+		
+		FVector EndLoc = Mesh->GetComponentLocation();
+
+		UE_LOG(LogTemp, Warning, TEXT("CATAPULT DEBUG: StartActorLoc=%s, EndActorLoc=%s, LocDiff=%s"),
+			*StartLoc.ToString(),
+			*EndLoc.ToString(),
+			*LocDiff.ToString());
 	}
 
 	bBlending = false;
@@ -383,6 +399,10 @@ FName USeatedTransitionComponent::ResolveBoneName(EPatientBoneRole BoneRole) con
 {
 	return BoneMapping ? BoneMapping->GetBoneName(BoneRole) : NAME_None;
 }
+
+
+
+
 
 
 

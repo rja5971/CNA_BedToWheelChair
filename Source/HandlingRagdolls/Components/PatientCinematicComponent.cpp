@@ -188,16 +188,19 @@ void UPatientCinematicComponent::RepositionPatient()
 	Mesh->TickAnimation(0.0f, false);
 	Mesh->RefreshBoneTransforms();
 
-	// 5. Align Mesh so new Anim Pelvis matches the Offset Anchor
+		// 5. Align Mesh so new Anim Pelvis matches the Offset Anchor
 	if (!PelvisBoneName.IsNone())
 	{
-		FVector NewAnimPelvisLoc = Mesh->GetSocketLocation(PelvisBoneName);
-		FVector LocDiff = AnchorTransform.GetLocation() - NewAnimPelvisLoc;
-		Mesh->AddWorldOffset(LocDiff, false, nullptr, ETeleportType::TeleportPhysics);
-
+		// CORRECT ORDER: Rotate first, then translate.
 		FRotator NewAnimPelvisRot = Mesh->GetSocketRotation(PelvisBoneName);
 		float YawDiff = AnchorTransform.Rotator().Yaw - NewAnimPelvisRot.Yaw;
 		Mesh->AddWorldRotation(FRotator(0.0f, YawDiff, 0.0f), false, nullptr, ETeleportType::TeleportPhysics);
+
+		Mesh->RefreshBoneTransforms();
+
+		FVector NewAnimPelvisLoc = Mesh->GetSocketLocation(PelvisBoneName);
+		FVector LocDiff = AnchorTransform.GetLocation() - NewAnimPelvisLoc;
+		Mesh->AddWorldOffset(LocDiff, false, nullptr, ETeleportType::TeleportPhysics);
 	}
 	else
 	{
@@ -223,4 +226,5 @@ void UPatientCinematicComponent::ClearAllTimers()
 		TM.ClearTimer(FadeInTimerHandle);
 	}
 }
+
 

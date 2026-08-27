@@ -50,9 +50,16 @@ void UWheelchairTransferState::TickState(float DeltaTime)
 		AWheelchairActor* Wheelchair = ActiveWheelchair.Get();
 		APatientActor* PatientActor = OwningStateMachine->GetPatient();
 		USeatedTransitionComponent* Transition = PatientActor ? PatientActor->GetSeatedTransitionComponent() : nullptr;
-		if (Wheelchair && Transition && Transition->IsSeatedLocked())
+				if (Wheelchair && Transition && Transition->IsSeatedLocked())
 		{
 			bPatientSeated = true;
+			// CRITICAL: We must transition the patient to the Seated state! 
+			// This permanently engages the pure animation driven flag, so that when 
+			// the 0.2s carry release timer expires, it doesn't wake physics back up and ruin the anim!
+			if (Patient)
+			{
+				Patient->SetPatientState(EPatientState::Seated);
+			}
 			Wheelchair->OnTransferComplete(PatientActor);
 		}
 		else if (!Transition || !Transition->IsSettling())
@@ -247,3 +254,4 @@ FText UWheelchairTransferState::GetInstructions() const
 
 	return FText::FromString(TEXT("Rotate the patient to face away from the wheelchair, then lower them into the seat."));
 }
+

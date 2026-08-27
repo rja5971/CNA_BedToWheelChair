@@ -305,8 +305,8 @@ private:
 
 	/** Is the neck currently being supported by a grab */
 	bool bNeckIsSupported = false;
-
 	/** If true, the patient has transitioned to pure animation and physics is completely locked out. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Patient|Animation", meta=(AllowPrivateAccess="true"))
 	bool bIsPureAnimationDriven = false;
 
 	/** Current grabbers and their grab bones */
@@ -359,4 +359,6 @@ private:
 	/** Check if a bone name maps to any of the given roles */
 	bool BoneMatchesAnyRole(FName BoneName, const TArray<EPatientBoneRole>& Roles) const;
 };
+
+
 
