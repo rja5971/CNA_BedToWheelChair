@@ -107,16 +107,6 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Seated Transition|Animation")
 	TObjectPtr<UAnimSequence> SeatedAnimation;
 
-	/** Optional seated Anim Blueprint. If unset, seating uses the legacy single-node animation. */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Seated Transition|Animation")
-	TSubclassOf<UAnimInstance> SeatedAnimClass;
-
-	/**
-	 * Enables the experimental foot-target Anim Blueprint path. Disabled by
-	 * default so the validated single-node seated animation remains active.
-	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Seated Transition|Animation")
-	bool bEnableSeatedFootIK = false;
 
 	/** Total time used to hand control from physics to animation. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Seated Transition|Animation", meta = (ClampMin = "0.1"))
@@ -172,4 +162,5 @@ private:
 	UPROPERTY()
 	TObjectPtr<UPatientPhysicsComponent> PhysicsComp;
 };
+
 

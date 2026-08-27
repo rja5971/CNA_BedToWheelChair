@@ -23,12 +23,7 @@ USeatedTransitionComponent::USeatedTransitionComponent()
 		SeatedAnimation = DefaultSeatedAnimation.Object;
 	}
 
-	static ConstructorHelpers::FClassFinder<UAnimInstance> DefaultSeatedAnimClass(
-		TEXT("/Game/Animations/ABP_Patient_SeatedIK"));
-	if (DefaultSeatedAnimClass.Succeeded())
-	{
-		SeatedAnimClass = DefaultSeatedAnimClass.Class;
-	}
+
 }
 
 void USeatedTransitionComponent::BeginPlay()
@@ -222,18 +217,11 @@ void USeatedTransitionComponent::StartBlend(const FTransform* SeatTarget)
 
 	PhysicsComp->ClearHeldPose();
 	Mesh->VisibilityBasedAnimTickOption = EVisibilityBasedAnimTickOption::AlwaysTickPoseAndRefreshBones;
-	if (bEnableSeatedFootIK && SeatedAnimClass && bHasSeatTarget)
-	{
-		Mesh->SetAnimInstanceClass(SeatedAnimClass);
-	}
-	else
-	{
-		Mesh->SetAnimationMode(EAnimationMode::AnimationSingleNode);
-		Mesh->SetAnimation(SeatedAnimation);
-		Mesh->SetPosition(0.0f);
-		Mesh->SetPlayRate(1.0f);
-		Mesh->Play(bLoopSeatedAnimation);
-	}
+	Mesh->SetAnimationMode(EAnimationMode::AnimationSingleNode);
+	Mesh->SetAnimation(SeatedAnimation);
+	Mesh->SetPosition(0.0f);
+	Mesh->SetPlayRate(1.0f);
+	Mesh->Play(bLoopSeatedAnimation);
 
 	PhysicsComp->ApplyProfile(EPhysicalAnimProfile::Seated);
 	ApplyPhysicsBlend(0.0f, 0.0f);
@@ -279,18 +267,11 @@ void USeatedTransitionComponent::SnapToAnimationAtTarget(const FTransform& SeatT
 	// in this frame instead of allowing the former ragdoll pose to blend.
 	PhysicsComp->ClearHeldPose();
 	Mesh->VisibilityBasedAnimTickOption = EVisibilityBasedAnimTickOption::AlwaysTickPoseAndRefreshBones;
-	if (bEnableSeatedFootIK && SeatedAnimClass && bHasSeatTarget)
-	{
-		Mesh->SetAnimInstanceClass(SeatedAnimClass);
-	}
-	else
-	{
-		Mesh->SetAnimationMode(EAnimationMode::AnimationSingleNode);
-		Mesh->SetAnimation(SeatedAnimation);
-		Mesh->SetPlayRate(1.0f);
-		Mesh->Play(bLoopSeatedAnimation);
-		Mesh->SetPosition(0.0f);
-	}
+	Mesh->SetAnimationMode(EAnimationMode::AnimationSingleNode);
+	Mesh->SetAnimation(SeatedAnimation);
+	Mesh->SetPlayRate(1.0f);
+	Mesh->Play(bLoopSeatedAnimation);
+	Mesh->SetPosition(0.0f);
 	ApplyPhysicsBlend(1.0f, 1.0f);
 	Mesh->SetAllBodiesSimulatePhysics(false);
 	Mesh->SetSimulatePhysics(false);
@@ -399,6 +380,10 @@ FName USeatedTransitionComponent::ResolveBoneName(EPatientBoneRole BoneRole) con
 {
 	return BoneMapping ? BoneMapping->GetBoneName(BoneRole) : NAME_None;
 }
+
+
+
+
 
 
 
