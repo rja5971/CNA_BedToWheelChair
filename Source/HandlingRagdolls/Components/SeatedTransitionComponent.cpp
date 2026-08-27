@@ -96,7 +96,64 @@ bool USeatedTransitionComponent::CheckSitThreshold(float TorsoAngle)
 
 void USeatedTransitionComponent::BeginSeatedSettle()
 {
-	StartBlend(nullptr);
+	UAnimSequence* BedAnim = BedSeatedAnimation ? BedSeatedAnimation : SeatedAnimation;
+	if (!BedAnim || !Mesh || !PhysicsComp) return;
+
+	bHasSeatTarget = false;
+	FName PelvisBone = ResolveBoneName(EPatientBoneRole::Pelvis);
+
+	// 1. Capture current Pelvis transform while physics is active
+	FTransform CapturedPelvis = FTransform::Identity;
+	if (!PelvisBone.IsNone())
+	{
+		CapturedPelvis = Mesh->GetSocketTransform(PelvisBone);
+	}
+
+		// 2. Stop physics completely
+	Mesh->SetSimulatePhysics(false);
+	Mesh->SetAllBodiesSimulatePhysics(false);
+	PhysicsComp->ClearHeldPose();
+
+	// CLEAR ROTATION: Force the mesh perfectly upright before the animation takes over.
+	// As requested, this clears the -90 X rotation (and any other Pitch/Roll) so the 
+	// animation evaluates properly without being tilted. 
+	// (Our Pelvis alignment step below will restore the correct facing Yaw).
+	Mesh->SetWorldRotation(FRotator::ZeroRotator, false, nullptr, ETeleportType::TeleportPhysics);
+
+	// 3. Play animation
+	Mesh->VisibilityBasedAnimTickOption = EVisibilityBasedAnimTickOption::AlwaysTickPoseAndRefreshBones;
+	Mesh->SetAnimationMode(EAnimationMode::AnimationSingleNode);
+	Mesh->SetAnimation(BedAnim);
+	Mesh->SetPosition(0.0f);
+	Mesh->SetPlayRate(1.0f);
+	Mesh->Play(bLoopSeatedAnimation);
+
+	// 4. Align Mesh so the new Anim Pelvis matches the Captured physics Pelvis
+	if (!PelvisBone.IsNone())
+	{
+		Mesh->TickAnimation(0.0f, false);
+		Mesh->RefreshBoneTransforms();
+
+		FVector AnimPelvisLoc = Mesh->GetSocketLocation(PelvisBone);
+		FVector LocDiff = CapturedPelvis.GetLocation() - AnimPelvisLoc;
+		Mesh->AddWorldOffset(LocDiff, false, nullptr, ETeleportType::TeleportPhysics);
+
+		FRotator AnimPelvisRot = Mesh->GetSocketRotation(PelvisBone);
+		float YawDiff = CapturedPelvis.Rotator().Yaw - AnimPelvisRot.Yaw;
+		Mesh->AddWorldRotation(FRotator(0.0f, YawDiff, 0.0f), false, nullptr, ETeleportType::TeleportPhysics);
+	}
+
+	bBlending = false;
+	bSeatedLocked = true;
+	SetComponentTickEnabled(false);
+
+	UE_LOG(LogTemp, Log, TEXT("SeatedTransition: Instantly snapped and aligned to bed seated animation."));
+	OnSeatedReached.Broadcast();
+
+	if (bDisablePhysicsAfterBedBlend && !bBedSeatedFinalized)
+	{
+		FinalizeBedSeatedBlend();
+	}
 }
 
 void USeatedTransitionComponent::BeginSeatedBlendToTarget(const FTransform& SeatTarget, AWheelchairActor* Wheelchair)
@@ -117,6 +174,7 @@ void USeatedTransitionComponent::ResetTransition()
 	bSeatedLocked = false;
 	bBlending = false;
 	bHasSeatTarget = false;
+	bBedSeatedFinalized = false;
 	TargetWheelchair.Reset();
 	BlendElapsed = 0.0f;
 	SetComponentTickEnabled(false);
@@ -148,7 +206,7 @@ void USeatedTransitionComponent::StartBlend(const FTransform* SeatTarget)
 
 	PhysicsComp->ClearHeldPose();
 	Mesh->VisibilityBasedAnimTickOption = EVisibilityBasedAnimTickOption::AlwaysTickPoseAndRefreshBones;
-	if (bEnableSeatedFootIK && SeatedAnimClass)
+	if (bEnableSeatedFootIK && SeatedAnimClass && bHasSeatTarget)
 	{
 		Mesh->SetAnimInstanceClass(SeatedAnimClass);
 	}
@@ -205,7 +263,7 @@ void USeatedTransitionComponent::SnapToAnimationAtTarget(const FTransform& SeatT
 	// in this frame instead of allowing the former ragdoll pose to blend.
 	PhysicsComp->ClearHeldPose();
 	Mesh->VisibilityBasedAnimTickOption = EVisibilityBasedAnimTickOption::AlwaysTickPoseAndRefreshBones;
-	if (bEnableSeatedFootIK && SeatedAnimClass)
+	if (bEnableSeatedFootIK && SeatedAnimClass && bHasSeatTarget)
 	{
 		Mesh->SetAnimInstanceClass(SeatedAnimClass);
 	}
@@ -268,6 +326,24 @@ void USeatedTransitionComponent::CompleteBlend()
 	SetComponentTickEnabled(false);
 	UE_LOG(LogTemp, Log, TEXT("SeatedTransition: Animation now fully controls the seated patient."));
 	OnSeatedReached.Broadcast();
+
+	// Bed blend path: when settling without a seat target, broadcast so the
+	// cinematic component can start its fade sequence.
+	if (!bHasSeatTarget && bDisablePhysicsAfterBedBlend && !bBedSeatedFinalized)
+	{
+		FinalizeBedSeatedBlend();
+	}
+}
+
+void USeatedTransitionComponent::FinalizeBedSeatedBlend()
+{
+	if (!Mesh || bBedSeatedFinalized) return;
+
+	// Physics is already disabled by CompleteBlend. Just mark finalized and
+	// notify listeners (cinematic component, etc.).
+	bBedSeatedFinalized = true;
+	UE_LOG(LogTemp, Log, TEXT("SeatedTransition: Bed seated blend finalized — physics fully disabled, broadcasting."));
+	OnBedSeatedBlendComplete.Broadcast();
 }
 
 void USeatedTransitionComponent::AlignAnimationToSeatTarget()
@@ -307,3 +383,7 @@ FName USeatedTransitionComponent::ResolveBoneName(EPatientBoneRole BoneRole) con
 {
 	return BoneMapping ? BoneMapping->GetBoneName(BoneRole) : NAME_None;
 }
+
+
+
+

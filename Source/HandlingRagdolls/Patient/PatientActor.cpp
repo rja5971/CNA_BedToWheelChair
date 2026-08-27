@@ -7,6 +7,7 @@
 #include "../Components/SeatedTransitionComponent.h"
 #include "../Components/CooperationRampComponent.h"
 #include "../Components/PatientCarryComponent.h"
+#include "../Components/PatientCinematicComponent.h"
 #include "PatientStateConfig.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "PhysicsEngine/PhysicalAnimationComponent.h"
@@ -39,6 +40,7 @@ APatientActor::APatientActor()
 	// Create the cooperation ramp component (owns progressive aliveness during fold-up)
 	CooperationRamp = CreateDefaultSubobject<UCooperationRampComponent>(TEXT("CooperationRamp"));
 	PatientCarry = CreateDefaultSubobject<UPatientCarryComponent>(TEXT("PatientCarry"));
+	PatientCinematic = CreateDefaultSubobject<UPatientCinematicComponent>(TEXT("PatientCinematic"));
 
 	// Default grabbable roles (resolved to bone names at runtime via BoneMapping).
 	// NOTE: These must correspond to bones that have PHYSICS BODIES in the physics
@@ -105,6 +107,17 @@ void APatientActor::BeginPlay()
 	if (PatientCarry)
 	{
 		PatientCarry->Initialize(PatientMesh, PatientPhysics);
+	}
+		if (PatientCinematic)
+	{
+		FName Pelvis = ResolveBoneName(EPatientBoneRole::Pelvis);
+		PatientCinematic->Initialize(PatientMesh, Pelvis);
+	}
+
+	// Bind the bed seated blend completion to kick off the cinematic fade.
+	if (SeatedTransition && PatientCinematic)
+	{
+		SeatedTransition->OnBedSeatedBlendComplete.AddDynamic(this, &APatientActor::OnBedSeatedBlendFinished);
 	}
 
 	// State data is authoritative, including at startup. Do not bypass the
@@ -202,6 +215,22 @@ void APatientActor::OnGrabbed(UGrabComponent* Grabber, FName BoneName, FVector G
 		{
 			SetPatientState(EPatientState::BeingSupported);
 		}
+
+		// --- RESPONSIVENESS: reduce mass during grab ---
+		// The patient is 70 kg with strong physical animation motors fighting the
+		// lying-down pose. This makes the physics handle unable to pull the body
+		// up without excessive hand travel. Temporarily reduce mass so the
+		// patient follows the hand naturally.
+		if (PatientPhysics)
+		{
+			PatientPhysics->ApplyGrabMassReduction();
+		}
+	}
+
+	// If the cinematic fade is running, cancel it to prevent a stuck black screen.
+	if (PatientCinematic && PatientCinematic->IsCinematicActive())
+	{
+		PatientCinematic->CancelCinematic();
 	}
 }
 
@@ -219,6 +248,42 @@ void APatientActor::OnReleased(UGrabComponent* Grabber)
 		{
 			bNeckIsSupported = true;
 			break;
+		}
+	}
+
+	// --- RESPONSIVENESS: restore mass and motors when no longer grabbed ---
+	if (ActiveGrabbers.Num() == 0 && PatientPhysics)
+	{
+				PatientPhysics->RestoreGrabMass();
+		
+		// If the patient is seated on the bed, physics is completely disabled and 
+		// animation owns the pose. Do not re-apply the Seated state config, because 
+		// that would forcefully re-enable physics simulation and fight the animation!
+		if (CurrentState == EPatientState::Seated)
+		{
+			return;
+		}
+
+		// Motors were disabled to make pulling easier. Re-apply the current state
+		// config to turn them back on.
+		UPatientStateConfig* StateConfig = FindStateConfig(CurrentState);
+		if (StateConfig)
+		{
+			PatientPhysics->ApplyStateConfig(StateConfig);
+		}
+		else
+		{
+			// Fallback
+			switch (CurrentState)
+			{
+			case EPatientState::LyingDown:
+			case EPatientState::BeingSupported:
+			case EPatientState::BeltAttached:
+				ApplyPhysicalAnimProfile(EPhysicalAnimProfile::Relaxed);
+				break;
+			default:
+				break;
+			}
 		}
 	}
 }
@@ -432,15 +497,38 @@ float APatientActor::GetCurrentAngleDeviation(FName BoneName) const
 
 void APatientActor::SetPatientState(EPatientState NewState)
 {
+	// If the patient enters the seated state on the bed, we lock out physics permanently for the rest of the workflow.
+	if (NewState == EPatientState::Seated)
+	{
+		bIsPureAnimationDriven = true;
+	}
+
 	if (NewState != EPatientState::Seated && SeatedTransition && SeatedTransition->IsSeatedLocked())
 	{
 		SeatedTransition->ResetTransition();
+
+		// Cancel the cinematic if it's still running.
+		if (PatientCinematic && PatientCinematic->IsCinematicActive())
+		{
+			PatientCinematic->CancelCinematic();
+		}
 	}
 
 	if (CurrentState != NewState)
 	{
 		CurrentState = NewState;
 		OnPatientStateChanged.Broadcast(NewState);
+
+		if (bIsPureAnimationDriven)
+		{
+			// The patient is now fully animation driven (e.g. BeltAttached, BeingLifted).
+			// Do not re-enable physics configs or profiles. Just trigger behavioral hooks.
+			if (NewState == EPatientState::Seated && SeatedTransition)
+			{
+				SeatedTransition->BeginSeatedSettle();
+			}
+			return;
+		}
 
 		// Carry animation owns every body. Record task-state changes without letting
 		// lifted/transfer configs re-enable physics underneath the kinematic pose.
@@ -461,9 +549,8 @@ void APatientActor::SetPatientState(EPatientState NewState)
 			// A couple of states still need behavioral hooks beyond bone setup:
 			if (NewState == EPatientState::Seated && SeatedTransition)
 			{
-				// The config already froze the spine in place (Anchored-hold).
-				// Just mark seated so sit-detection stops re-triggering.
-				SeatedTransition->MarkSeated();
+				// Begin the cinematic bed blend (which clears the held pose and smoothly hands off to animation).
+				SeatedTransition->BeginSeatedSettle();
 			}
 			else if (NewState == EPatientState::Injured)
 			{
@@ -588,6 +675,13 @@ bool APatientActor::CanUseKinematicCarry() const
 void APatientActor::RestorePhysicsAfterKinematicCarry()
 {
 	if (!PatientMesh || !PatientPhysics) return;
+	
+	if (bIsPureAnimationDriven)
+	{
+		UE_LOG(LogTemp, Log, TEXT("PatientActor: Skipped restoring physics after carry (pure animation driven)."));
+		return;
+	}
+
 	PatientMesh->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
 	if (UPatientStateConfig* Config = FindStateConfig(CurrentState))
 	{
@@ -703,6 +797,15 @@ void APatientActor::OnSeatedTransitionComplete()
 	UE_LOG(LogTemp, Log, TEXT("PatientActor: Seated transition complete; seated idle owns the pose."));
 }
 
+void APatientActor::OnBedSeatedBlendFinished()
+{
+	UE_LOG(LogTemp, Log, TEXT("PatientActor: Bed seated blend finished — starting cinematic sequence."));
+	if (PatientCinematic)
+	{
+		PatientCinematic->StartCinematicSequence();
+	}
+}
+
 // ============================================================
 // Bone Mapping Resolution Helpers
 // ============================================================
@@ -763,3 +866,7 @@ bool APatientActor::BoneMatchesAnyRole(FName BoneName, const TArray<EPatientBone
 }
 
 // End of PatientActor implementation
+
+
+
+

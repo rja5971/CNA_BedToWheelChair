@@ -23,6 +23,7 @@ class UPatientStateConfig;
 class USeatedTransitionComponent;
 class UCooperationRampComponent;
 class UPatientCarryComponent;
+class UPatientCinematicComponent;
 class AWheelchairActor;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnPatientStateChanged, EPatientState, NewState);
@@ -150,6 +151,10 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Patient|Kinematic Carry")
 	bool CanUseKinematicCarry() const;
 
+	/** Get the cinematic fade component. */
+	UFUNCTION(BlueprintPure, Category = "Patient|Cinematic")
+	UPatientCinematicComponent* GetPatientCinematicComponent() const { return PatientCinematic; }
+
 	void RestorePhysicsAfterKinematicCarry();
 
 	UFUNCTION(BlueprintCallable, Category = "Patient|Seated Transition")
@@ -218,6 +223,10 @@ protected:
 	/** Owns the animation-only, headset-facing belt carry mode. */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Patient")
 	TObjectPtr<UPatientCarryComponent> PatientCarry;
+
+	/** Owns the cinematic fade sequence after the bed seated blend. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Patient")
+	TObjectPtr<UPatientCinematicComponent> PatientCinematic;
 
 	// ============================================================
 	// Configuration
@@ -297,6 +306,9 @@ private:
 	/** Is the neck currently being supported by a grab */
 	bool bNeckIsSupported = false;
 
+	/** If true, the patient has transitioned to pure animation and physics is completely locked out. */
+	bool bIsPureAnimationDriven = false;
+
 	/** Current grabbers and their grab bones */
 	TMap<UGrabComponent*, FName> ActiveGrabbers;
 
@@ -328,6 +340,10 @@ private:
 	UFUNCTION()
 	void OnSeatedTransitionComplete();
 
+	/** Called when the bed seated blend finishes — starts the cinematic sequence. */
+	UFUNCTION()
+	void OnBedSeatedBlendFinished();
+
 	/** Find the state config matching a given state; returns nullptr if none */
 	UPatientStateConfig* FindStateConfig(EPatientState State) const;
 
@@ -343,3 +359,4 @@ private:
 	/** Check if a bone name maps to any of the given roles */
 	bool BoneMatchesAnyRole(FName BoneName, const TArray<EPatientBoneRole>& Roles) const;
 };
+
