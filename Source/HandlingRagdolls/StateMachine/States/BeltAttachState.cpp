@@ -6,6 +6,7 @@
 #include "../../Interfaces/ISpineMonitorable.h"
 #include "../../Components/BeltComponent.h"
 #include "../../Components/ScoringComponent.h"
+#include "../../Transfer/BeltActor.h"
 
 void UBeltAttachState::EnterState(UTransferStateMachine* StateMachine)
 {
@@ -22,8 +23,17 @@ void UBeltAttachState::TickState(float DeltaTime)
 	IIPatient* Patient = OwningStateMachine->GetPatientInterface();
 	if (!Patient) return;
 
-	// Check if belt has been attached
-	if (Patient->HasBeltAttached())
+	// The physical parent is established before the visible wrap begins. Do not
+	// advance to lifting until the fitted belt and its grab handle are ready.
+	bool bWrapComplete = true;
+	if (UBeltComponent* Belt = OwningStateMachine->GetBelt())
+	{
+		if (const ABeltActor* BeltActor = Cast<ABeltActor>(Belt->GetOwner()))
+		{
+			bWrapComplete = BeltActor->IsWrapComplete();
+		}
+	}
+	if (Patient->HasBeltAttached() && bWrapComplete)
 	{
 		bBeltAttached = true;
 	}

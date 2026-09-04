@@ -62,9 +62,11 @@ bool UBeltComponent::AttachToPatient(AActor* PatientActor)
 		BeltMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	}
 
-	// Move the belt to the bone position (location only, zero rotation, keep original scale)
+	// Align to the complete patient-authored attachment transform. The spline belt
+	// is defined in this local waist frame, so discarding rotation would make the
+	// fitted ellipse drift or stand on edge when the patient pose changes.
 	FVector OriginalScale = Owner->GetActorScale3D();
-	Owner->SetActorLocationAndRotation(AttachTransform.GetLocation(), FRotator::ZeroRotator.Quaternion());
+	Owner->SetActorLocationAndRotation(AttachTransform.GetLocation(), AttachTransform.GetRotation());
 	Owner->SetActorScale3D(OriginalScale);
 
 	// Attach directly to the patient's skeletal mesh bone (no physics constraint needed)
@@ -72,6 +74,11 @@ bool UBeltComponent::AttachToPatient(AActor* PatientActor)
 	if (PatientMesh)
 	{
 		Owner->AttachToComponent(PatientMesh, FAttachmentTransformRules::KeepWorldTransform, AttachBone);
+	}
+
+	if (ABeltActor* BeltActor = Cast<ABeltActor>(Owner))
+	{
+		BeltActor->StartWrapAnimation();
 	}
 
 	// Store reference and notify
@@ -100,6 +107,10 @@ void UBeltComponent::DetachFromPatient()
 	if (Owner)
 	{
 		Owner->DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
+		if (ABeltActor* BeltActor = Cast<ABeltActor>(Owner))
+		{
+			BeltActor->ResetWrapAnimation();
+		}
 	}
 
 	// Re-enable physics and collision

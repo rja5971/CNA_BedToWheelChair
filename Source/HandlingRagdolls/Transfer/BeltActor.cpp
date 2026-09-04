@@ -9,6 +9,8 @@
 #include "Components/SphereComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Components/SceneComponent.h"
+#include "Components/SplineComponent.h"
+#include "Components/SplineMeshComponent.h"
 #include "UObject/ConstructorHelpers.h"
 #include "EngineUtils.h"
 #include "DrawDebugHelpers.h"
@@ -32,16 +34,17 @@ ABeltActor::ABeltActor()
 	BeltMesh->SetLinearDamping(1.0f);
 	BeltMesh->SetAngularDamping(5.0f);
 
-	// Load a basic cylinder as the default placeholder mesh.
-	// Designers can override this in the instance details panel.
+	// Keep the cylinder as an invisible, stable pickup/physics proxy. The spline
+	// meshes below are visual-only and never participate in Chaos simulation.
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> CylinderMesh(
 		TEXT("/Engine/BasicShapes/Cylinder.Cylinder"));
 	if (CylinderMesh.Succeeded())
 	{
 		BeltMesh->SetStaticMesh(CylinderMesh.Object);
-		// Scale to belt-like proportions: wide & thin cylinder
-		BeltMesh->SetWorldScale3D(FVector(0.4f, 0.4f, 0.05f));
+		BeltMesh->SetRelativeScale3D(FVector(0.4f, 0.4f, 0.05f));
 	}
+	BeltMesh->SetVisibility(false);
+	BeltMesh->SetHiddenInGame(true);
 
 	// Single front handle grab point (positioned in front of the patient's waist).
 	HandleFront = CreateDefaultSubobject<USceneComponent>(TEXT("BeltHandle_Front"));
@@ -77,6 +80,30 @@ ABeltActor::ABeltActor()
 
 	// Belt logic component
 	BeltComp = CreateDefaultSubobject<UBeltComponent>(TEXT("BeltComponent"));
+
+	// Spline component
+	BeltSpline = CreateDefaultSubobject<USplineComponent>(TEXT("BeltSpline"));
+	BeltSpline->SetupAttachment(RootComponent);
+	// The hidden physics proxy is non-uniformly scaled; the visible belt and its
+	// handle must remain in centimetres rather than inheriting that proxy scale.
+	BeltSpline->SetAbsolute(false, false, true);
+	BeltSpline->SetClosedLoop(true, false);
+	BeltSpline->SetDefaultUpVector(FVector::UpVector, ESplineCoordinateSpace::Local);
+	HandleFront->SetupAttachment(BeltSpline);
+
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> CubeMesh(TEXT("/Engine/BasicShapes/Cube.Cube"));
+	if (CubeMesh.Succeeded())
+	{
+		SplineSegmentMesh = CubeMesh.Object;
+	}
+}
+
+void ABeltActor::OnConstruction(const FTransform& Transform)
+{
+	Super::OnConstruction(Transform);
+	EnsureSplinePointCount();
+	UpdateSplineForProgress(bWrapComplete ? 1.0f : WrapProgress);
+	RebuildSplineMeshes();
 }
 
 void ABeltActor::BeginPlay()
@@ -96,12 +123,6 @@ void ABeltActor::BeginPlay()
 		HandleFrontVisual->SetCollisionResponseToChannel(ECC_PhysicsBody, ECR_Ignore);
 	}
 
-	// Apply the configurable handle offset
-	if (HandleFront)
-	{
-		HandleFront->SetRelativeLocation(HandleOffset);
-	}
-
 	// Sync the proximity sphere to the configurable radius
 	if (AttachProximity)
 	{
@@ -109,11 +130,19 @@ void ABeltActor::BeginPlay()
 		AttachProximity->SetHiddenInGame(!bShowDetectionRadius);
 		AttachProximity->SetVisibility(bShowDetectionRadius);
 	}
+
+	EnsureSplinePointCount();
+	ResetWrapAnimation();
+	RebuildSplineMeshes();
+	SuppressLegacyBlueprintBeltVisuals();
 }
 
 void ABeltActor::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
+
+	// Animate the belt spline
+	AnimateBelt(DeltaTime);
 
 	// Only check for attachment while belt is being carried and not yet attached
 	if (!bIsBeingCarried || !BeltComp || BeltComp->IsAttached()) return;
@@ -141,9 +170,6 @@ void ABeltActor::Tick(float DeltaTime)
 		FTransform AttachTransform = BeltTarget->GetBeltAttachTransform();
 		float Distance = FVector::Dist(BeltLocation, AttachTransform.GetLocation());
 
-		UE_LOG(LogTemp, Verbose, TEXT("BeltActor: Distance to %s attach point: %.1f (radius: %.1f)"),
-			*Other->GetName(), Distance, AttachRadius);
-
 		if (Distance > AttachRadius) continue;
 
 		// Attempt attachment
@@ -156,11 +182,234 @@ void ABeltActor::Tick(float DeltaTime)
 			UE_LOG(LogTemp, Log, TEXT("BeltActor: Auto-attached to %s (distance: %.1f)"), *Other->GetName(), Distance);
 			return;
 		}
-		else
+	}
+}
+
+void ABeltActor::RebuildSplineMeshes()
+{
+	if (!BeltSpline || !SplineSegmentMesh) return;
+
+	EnsureSplinePointCount();
+	RuntimeSplineMeshes.RemoveAll([](const TObjectPtr<USplineMeshComponent>& SplineMesh)
+	{
+		return !IsValid(SplineMesh);
+	});
+
+	int32 NumPoints = BeltSpline->GetNumberOfSplinePoints();
+	if (NumPoints < 2) return;
+
+	int32 NumSegments = BeltSpline->IsClosedLoop() ? NumPoints : NumPoints - 1;
+
+	while (RuntimeSplineMeshes.Num() > NumSegments)
+	{
+		if (USplineMeshComponent* ExtraSegment = RuntimeSplineMeshes.Pop())
 		{
-			UE_LOG(LogTemp, Warning, TEXT("BeltActor: AttachToPatient failed for %s (CanAttachBelt may be false)"), *Other->GetName());
+			ExtraSegment->DestroyComponent();
 		}
 	}
+
+	while (RuntimeSplineMeshes.Num() < NumSegments)
+	{
+		USplineMeshComponent* SplineMesh = NewObject<USplineMeshComponent>(this, USplineMeshComponent::StaticClass());
+		SplineMesh->CreationMethod = EComponentCreationMethod::UserConstructionScript;
+		SplineMesh->SetupAttachment(BeltSpline);
+		SplineMesh->SetMobility(EComponentMobility::Movable);
+		SplineMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		SplineMesh->RegisterComponentWithWorld(GetWorld());
+		RuntimeSplineMeshes.Add(SplineMesh);
+	}
+
+	for (USplineMeshComponent* SplineMesh : RuntimeSplineMeshes)
+	{
+		if (!SplineMesh) continue;
+		SplineMesh->SetStaticMesh(SplineSegmentMesh);
+		SplineMesh->SetForwardAxis(ESplineMeshAxis::X, false);
+		SplineMesh->SetSplineUpDir(FVector::UpVector, false);
+		SplineMesh->SetStartScale(SplineMeshCrossSectionScale, false);
+		SplineMesh->SetEndScale(SplineMeshCrossSectionScale, false);
+		if (SplineSegmentMaterial)
+		{
+			SplineMesh->SetMaterial(0, SplineSegmentMaterial);
+		}
+	}
+
+	UpdateSplineMeshSegments();
+}
+
+void ABeltActor::AnimateBelt(float DeltaTime)
+{
+	if (!bWrapAnimating)
+	{
+		return;
+	}
+
+	WrapElapsed += DeltaTime;
+	WrapProgress = WrapDuration <= KINDA_SMALL_NUMBER
+		? 1.0f
+		: FMath::Clamp(WrapElapsed / WrapDuration, 0.0f, 1.0f);
+	UpdateSplineForProgress(WrapProgress);
+
+	if (WrapProgress >= 1.0f)
+	{
+		bWrapAnimating = false;
+		bWrapComplete = true;
+		if (HandleFrontVisual)
+		{
+			HandleFrontVisual->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+		}
+		UE_LOG(LogTemp, Log, TEXT("BeltActor: Waist wrap animation completed."));
+	}
+}
+
+void ABeltActor::StartWrapAnimation()
+{
+	bWrapAnimating = true;
+	bWrapComplete = false;
+	WrapElapsed = 0.0f;
+	WrapProgress = 0.0f;
+	if (HandleFrontVisual)
+	{
+		HandleFrontVisual->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	}
+	UpdateSplineForProgress(0.0f);
+	UE_LOG(LogTemp, Log, TEXT("BeltActor: Waist wrap animation started."));
+}
+
+void ABeltActor::ResetWrapAnimation()
+{
+	bWrapAnimating = false;
+	bWrapComplete = false;
+	WrapElapsed = 0.0f;
+	WrapProgress = 0.0f;
+	if (HandleFrontVisual)
+	{
+		HandleFrontVisual->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+	}
+	UpdateSplineForProgress(0.0f);
+}
+
+void ABeltActor::EnsureSplinePointCount()
+{
+	if (!BeltSpline) return;
+
+	const int32 DesiredPointCount = FMath::Clamp(SplineSegmentCount, 8, 32);
+	if (BeltSpline->GetNumberOfSplinePoints() == DesiredPointCount && BeltSpline->IsClosedLoop())
+	{
+		return;
+	}
+
+	BeltSpline->ClearSplinePoints(false);
+	for (int32 PointIndex = 0; PointIndex < DesiredPointCount; ++PointIndex)
+	{
+		BeltSpline->AddSplinePoint(FVector::ZeroVector, ESplineCoordinateSpace::Local, false);
+		BeltSpline->SetSplinePointType(PointIndex, ESplinePointType::Curve, false);
+	}
+	BeltSpline->SetClosedLoop(true, false);
+	BeltSpline->UpdateSpline();
+}
+
+void ABeltActor::UpdateSplineForProgress(float InProgress)
+{
+	if (!BeltSpline) return;
+	EnsureSplinePointCount();
+
+	const int32 NumPoints = BeltSpline->GetNumberOfSplinePoints();
+	if (NumPoints < 2) return;
+
+	const float Alpha = FMath::SmoothStep(0.0f, 1.0f, FMath::Clamp(InProgress, 0.0f, 1.0f));
+	for (int32 PointIndex = 0; PointIndex < NumPoints; ++PointIndex)
+	{
+		const float Angle = (2.0f * PI) * static_cast<float>(PointIndex) / static_cast<float>(NumPoints);
+		const FVector Point = FMath::Lerp(GetLooseSplinePoint(Angle), GetFittedSplinePoint(Angle), Alpha);
+		BeltSpline->SetLocationAtSplinePoint(PointIndex, Point, ESplineCoordinateSpace::Local, false);
+		BeltSpline->SetSplinePointType(PointIndex, ESplinePointType::Curve, false);
+	}
+	BeltSpline->UpdateSpline();
+
+	if (HandleFront)
+	{
+		const FVector LooseHandleLocation = GetLooseSplinePoint(0.0f);
+		HandleFront->SetRelativeLocation(FMath::Lerp(LooseHandleLocation, HandleOffset, Alpha));
+	}
+
+	UpdateSplineMeshSegments();
+}
+
+void ABeltActor::UpdateSplineMeshSegments()
+{
+	if (!BeltSpline || RuntimeSplineMeshes.IsEmpty()) return;
+
+	const int32 NumPoints = BeltSpline->GetNumberOfSplinePoints();
+	for (int32 SegmentIndex = 0; SegmentIndex < RuntimeSplineMeshes.Num(); ++SegmentIndex)
+	{
+		USplineMeshComponent* SplineMesh = RuntimeSplineMeshes[SegmentIndex];
+		if (!SplineMesh || NumPoints < 2) continue;
+
+		const int32 StartPointIndex = SegmentIndex % NumPoints;
+		const int32 EndPointIndex = (StartPointIndex + 1) % NumPoints;
+		FVector StartPos;
+		FVector StartTangent;
+		FVector EndPos;
+		FVector EndTangent;
+		BeltSpline->GetLocationAndTangentAtSplinePoint(StartPointIndex, StartPos, StartTangent,
+			ESplineCoordinateSpace::Local);
+		BeltSpline->GetLocationAndTangentAtSplinePoint(EndPointIndex, EndPos, EndTangent,
+			ESplineCoordinateSpace::Local);
+		SplineMesh->SetStartAndEnd(StartPos, StartTangent, EndPos, EndTangent, true);
+	}
+}
+
+void ABeltActor::SuppressLegacyBlueprintBeltVisuals()
+{
+	// BP_Belt predates the native runtime belt and owns a second construction-
+	// script spline plus a button-driven reveal timeline. Keep those objects alive
+	// for Blueprint reference safety, but permanently hide their generated visual
+	// sections so the old ring cannot render over the wrapping belt.
+	TInlineComponentArray<USplineMeshComponent*> AllSplineMeshes(this);
+	for (USplineMeshComponent* SplineMesh : AllSplineMeshes)
+	{
+		if (!SplineMesh || RuntimeSplineMeshes.Contains(SplineMesh)) continue;
+		SplineMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		SplineMesh->SetVisibility(false, true);
+		SplineMesh->SetHiddenInGame(true, true);
+		SplineMesh->Deactivate();
+	}
+
+	// The legacy widget is only capable of replaying that obsolete reveal
+	// timeline. Hide and disable it without taking a C++ dependency on UMG.
+	TInlineComponentArray<UPrimitiveComponent*> PrimitiveComponents(this);
+	for (UPrimitiveComponent* Primitive : PrimitiveComponents)
+	{
+		if (!Primitive) continue;
+		FString NormalizedName = Primitive->GetName();
+		NormalizedName.ReplaceInline(TEXT("_"), TEXT(" "));
+		if (NormalizedName.Contains(TEXT("Belt animation play widget"), ESearchCase::IgnoreCase))
+		{
+			Primitive->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+			Primitive->SetVisibility(false, true);
+			Primitive->SetHiddenInGame(true, true);
+			Primitive->SetComponentTickEnabled(false);
+			Primitive->Deactivate();
+		}
+	}
+}
+
+FVector ABeltActor::GetLooseSplinePoint(float AngleRadians) const
+{
+	const float CosAngle = FMath::Cos(AngleRadians);
+	const float SinAngle = FMath::Sin(AngleRadians);
+	return FVector(
+		LooseForwardOffset + LooseHalfDepth * CosAngle,
+		LooseHalfWidth * SinAngle,
+		-0.5f * LooseDrop * (1.0f - CosAngle));
+}
+
+FVector ABeltActor::GetFittedSplinePoint(float AngleRadians) const
+{
+	return FVector(
+		WaistHalfDepth * FMath::Cos(AngleRadians),
+		WaistHalfWidth * FMath::Sin(AngleRadians),
+		WaistVerticalOffset);
 }
 
 // ============================================================
@@ -178,8 +427,11 @@ bool ABeltActor::CanBeGrabbed(FName BoneName, FVector GrabLocation) const
 	}
 
 	// If attached, check if the grab location is near the front handle.
-	// (The handle sphere is a static mesh with no bones, so BoneName is None —
-	// we validate by proximity to the handle position instead.)
+	if (!bWrapComplete)
+	{
+		return false;
+	}
+
 	if (HandleFront)
 	{
 		float Dist = FVector::Dist(GrabLocation, HandleFront->GetComponentLocation());
@@ -196,6 +448,7 @@ void ABeltActor::OnGrabbed(UGrabComponent* Grabber, FName BoneName, FVector Grab
 
 	if (BeltComp->IsAttached())
 	{
+		if (!bWrapComplete) return;
 		// Single front handle
 		BeltComp->OnHandleGrabbed(Grabber, FName("BeltHandle_Front"), GrabLocation);
 		UE_LOG(LogTemp, Log, TEXT("BeltActor: Front handle grabbed"));
