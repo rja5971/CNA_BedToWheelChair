@@ -15,11 +15,16 @@ public class HandlingRagdolls : ModuleRules
 			"InputCore",
 			"PhysicsCore",
 			"HeadMountedDisplay",
-			"EnhancedInput"
+			"XRBase",
+			"EnhancedInput",
+			"UMG",
+			"MediaAssets"
 		});
 
 		PrivateDependencyModuleNames.AddRange(new string[] {
-			"AnimGraphRuntime"
+			"AnimGraphRuntime",
+			"Slate",
+			"SlateCore"
 		});
 	}
 }

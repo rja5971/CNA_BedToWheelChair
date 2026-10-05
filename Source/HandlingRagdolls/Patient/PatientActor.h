@@ -24,6 +24,7 @@ class USeatedTransitionComponent;
 class UCooperationRampComponent;
 class UPatientCarryComponent;
 class UPatientCinematicComponent;
+class UPatientBedSupportComponent;
 class AWheelchairActor;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnPatientStateChanged, EPatientState, NewState);
@@ -68,6 +69,12 @@ public:
 	virtual TArray<FName> GetGrabbableBoneNames() const override;
 	virtual FName GetGrabBoneOverride() const override { return NAME_None; }
 	virtual bool RequiresRotationConstraint() const override { return false; }
+	UFUNCTION(BlueprintPure, Category = "Patient|Bed")
+	UPatientBedSupportComponent* GetBedSupportComponent() const { return BedSupport; }
+	virtual bool IsBedSeated() const override;
+	void NotifyBedSeated();
+	void PrepareForBeltCarry();
+	void RefreshBedGrabRegions();
 
 	// ============================================================
 	// IBeltAttachable Implementation
@@ -227,6 +234,9 @@ protected:
 	/** Owns the cinematic fade sequence after the bed seated blend. */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Patient")
 	TObjectPtr<UPatientCinematicComponent> PatientCinematic;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Patient|Bed")
+	TObjectPtr<UPatientBedSupportComponent> BedSupport;
 
 	// ============================================================
 	// Configuration

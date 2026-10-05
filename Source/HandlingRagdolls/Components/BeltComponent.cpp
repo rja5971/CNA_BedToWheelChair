@@ -166,7 +166,9 @@ void UBeltComponent::OnHandleGrabbed(UGrabComponent* Grabber, FName HandleName, 
 
 void UBeltComponent::OnHandleReleased(UGrabComponent* Grabber)
 {
-	if (!Grabber) return;
+	// Retiring a loose-belt constraint after attachment is not a carry-handle
+	// release. Ignore callbacks from hands which never acquired an attached handle.
+	if (!Grabber || !ActiveGrabbers.Contains(Grabber)) return;
 	ActiveGrabbers.Remove(Grabber);
 	if (APatientActor* PatientActor = Cast<APatientActor>(AttachedPatient))
 	{

@@ -49,6 +49,7 @@ bool UPatientCarryComponent::BeginCarry(UGrabComponent* Grabber, ABeltActor* Bel
 	{
 		return true;
 	}
+	if (APatientActor* Patient = Cast<APatientActor>(GetOwner())) Patient->PrepareForBeltCarry();
 
 	PhysicsComp->ClearHeldPose();
 	Mesh->VisibilityBasedAnimTickOption = EVisibilityBasedAnimTickOption::AlwaysTickPoseAndRefreshBones;

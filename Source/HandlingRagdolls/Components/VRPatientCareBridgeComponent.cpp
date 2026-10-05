@@ -42,14 +42,22 @@ bool UVRPatientCareBridgeComponent::TryInstall()
 	{
 		RightController = FindController(false);
 	}
-	if (LeftController && !LeftGrabber)
-	{
-		LeftGrabber = CreateGrabber(TEXT("PatientCareGrabLeft"), LeftController);
-	}
-	if (RightController && !RightGrabber)
-	{
-		RightGrabber = CreateGrabber(TEXT("PatientCareGrabRight"), RightController);
-	}
+
+    // The shipped VRPawn already owns native grab components and Blueprint grip
+    // bindings. Reuse them instead of adding two more constraints and callbacks.
+    TArray<UGrabComponent*> Existing;
+    GetOwner()->GetComponents(Existing);
+    for (UGrabComponent* Grabber : Existing)
+    {
+        if (Grabber->GetName().Contains(TEXT("Left"))) LeftGrabber = Grabber;
+        if (Grabber->GetName().Contains(TEXT("Right"))) RightGrabber = Grabber;
+    }
+    const bool bUsesPawnBindings = LeftGrabber && RightGrabber;
+    if (LeftController && !LeftGrabber) LeftGrabber = CreateGrabber(TEXT("PatientCareGrabLeft"), LeftController);
+    if (RightController && !RightGrabber) RightGrabber = CreateGrabber(TEXT("PatientCareGrabRight"), RightController);
+    if (LeftGrabber && LeftController) LeftGrabber->SetTraceOrigin(LeftController);
+    if (RightGrabber && RightController) RightGrabber->SetTraceOrigin(RightController);
+    if (bUsesPawnBindings) bInputBound = true;
 
 	if (!bInputBound)
 	{

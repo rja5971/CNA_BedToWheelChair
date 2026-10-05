@@ -27,6 +27,7 @@ class HANDLINGRAGDOLLS_API UGrabComponent : public UActorComponent
 
 public:
 	UGrabComponent();
+	virtual void EndPlay(const EEndPlayReason::Type Reason) override;
 
 protected:
 	virtual void BeginPlay() override;
@@ -48,6 +49,13 @@ public:
 	/** Check if currently holding something */
 	UFUNCTION(BlueprintCallable, Category = "Ragdoll Grab")
 	bool IsGrabbing() const { return GrabbedActor != nullptr; }
+	UFUNCTION(BlueprintPure, Category = "Ragdoll Grab")
+	bool IsGripHeld() const { return bGripHeld; }
+	/** Explicit cancellation (tracking/focus loss) requires a fresh physical press. */
+	void CancelGrab() { ReleaseRagdoll(); }
+	float GetActiveForceLimit() const;
+	void SuspendInteraction();
+	void ResumeInteraction();
 
 	/** Get the actor currently being grabbed */
 	UFUNCTION(BlueprintCallable, Category = "Ragdoll Grab")
@@ -151,10 +159,22 @@ private:
 
 	/** Location of the grab point */
 	FVector GrabLocation;
+	bool bGripHeld = false;
+	bool bPatientBodyGrab = false;
+	FVector HandContactOffset = FVector::ZeroVector;
+	FVector BodyLocalContact = FVector::ZeroVector;
+	FVector PreviousTarget = FVector::ZeroVector;
+	FVector PreviousHandPosition = FVector::ZeroVector;
+	float RetryElapsed = 0.0f;
+	bool bInteractionSuspended = false;
+	FDelegateHandle BackgroundHandle;
+	FDelegateHandle DeactivateHandle;
+	FDelegateHandle ForegroundHandle;
+	FDelegateHandle ReactivateHandle;
 
 	/** Find the nearest grabbable actor and bone */
 	bool FindGrabTarget(AActor*& OutActor, FName& OutBoneName, FVector& OutLocation) const;
 
 	/** Update the physics handle target to follow hand position */
-	void UpdateGrabTarget();
+	void UpdateGrabTarget(float DeltaTime);
 };

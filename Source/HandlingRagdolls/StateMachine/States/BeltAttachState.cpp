@@ -29,7 +29,7 @@ void UBeltAttachState::TickState(float DeltaTime)
 	}
 
 	// Penalize if neck support is lost during belt attachment
-	if (!Patient->IsNeckSupported())
+	if (!Patient->IsNeckSupported() && !Patient->IsBedSeated())
 	{
 		UScoringComponent* Scoring = OwningStateMachine->GetScoring();
 		if (Scoring)
@@ -60,5 +60,5 @@ FText UBeltAttachState::GetInstructions() const
 	{
 		return FText::FromString(TEXT("Belt attached! Now grab the belt handles and carefully lift the patient."));
 	}
-	return FText::FromString(TEXT("Attach the transfer belt around the patient's torso. Keep supporting the neck!"));
+	return FText::FromString(TEXT("Attach the transfer belt around the patient's torso once seated at the bed edge."));
 }

@@ -1,5 +1,11 @@
 # VR Patient Care & Locomotion Simulator: Architecture Deep Dive
 
+The active bed workflow now uses `PatientBedSupportComponent` and dedicated
+joint-limited physics instead of the anchored bed-state profiles described below.
+See [Natural patient grabbing and bed sit-up](PATIENT_BED_INTERACTION.md) for current
+bed ownership, regional muscle overrides and validation. Carry and wheelchair
+seating continue to use the existing transfer systems.
+
 > **Primary Technical Reference Document**
 > Repository Location: `docs/ARCHITECTURE_DEEP_DIVE.md`
 

@@ -27,6 +27,8 @@ class HANDLINGRAGDOLLS_API IIPatient
 public:
 	/** Check if neck is currently being supported */
 	virtual bool IsNeckSupported() const = 0;
+	/** Stable bed-edge seating is independent of belt/task progress. */
+	virtual bool IsBedSeated() const { return GetPatientState() == EPatientState::Seated; }
 
 	/** Get world location of the patient's pelvis bone */
 	virtual FVector GetPelvisLocation() const = 0;

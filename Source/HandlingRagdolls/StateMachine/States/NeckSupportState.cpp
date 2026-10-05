@@ -25,7 +25,7 @@ void UNeckSupportState::TickState(float DeltaTime)
 	// The bed handoff can release the physics grab before RequiredSupportDuration,
 	// so do not leave the task state machine stranded behind the actual workflow.
 	const EPatientState PatientState = Patient->GetPatientState();
-	if (Patient->HasBeltAttached()
+	if (Patient->IsBedSeated() || Patient->HasBeltAttached()
 		|| PatientState == EPatientState::Seated
 		|| PatientState == EPatientState::BeltAttached
 		|| PatientState == EPatientState::BeingLifted
@@ -74,7 +74,7 @@ FText UNeckSupportState::GetInstructions() const
 {
 	if (bSupportRequirementMet)
 	{
-		return FText::FromString(TEXT("Good! Neck is supported. Now attach the transfer belt around the patient's torso."));
+		return FText::FromString(TEXT("Support the torso and hips, guide both legs off the bed, then attach the belt when seated."));
 	}
-	return FText::FromString(TEXT("Gently grab and support the patient's neck/head. Hold steady for 2 seconds."));
+	return FText::FromString(TEXT("Support the head and torso, move the hips toward the chair-side edge, and guide the legs off the bed."));
 }
