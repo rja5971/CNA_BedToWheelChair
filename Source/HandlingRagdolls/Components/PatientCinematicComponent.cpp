@@ -8,10 +8,88 @@
 #include "Kismet/GameplayStatics.h"
 #include "Camera/PlayerCameraManager.h"
 #include "GameFramework/PlayerController.h"
+#include "Components/StereoLayerComponent.h"
+#include "Engine/Engine.h"
+#include "Engine/TextureRenderTarget2D.h"
+#include "HAL/IConsoleManager.h"
+#include "Kismet/KismetRenderingLibrary.h"
 
 UPatientCinematicComponent::UPatientCinematicComponent()
 {
-	PrimaryComponentTick.bCanEverTick = false;
+	PrimaryComponentTick.bCanEverTick = true;
+	PrimaryComponentTick.bStartWithTickEnabled = false;
+}
+
+bool UPatientCinematicComponent::CreateVRFadeOverlay()
+{
+	if (VRFadeLayer) return true;
+	if (!GetOwner() || !GetWorld()) return false;
+
+	// A runtime texture avoids a material/texture asset dependency in the cook.
+	VRFadeTexture = UKismetRenderingLibrary::CreateRenderTarget2D(this, 16, 16, RTF_RGBA8, FLinearColor::Transparent);
+	if (!VRFadeTexture) return false;
+	VRFadeLayer = NewObject<UStereoLayerComponent>(GetOwner(), NAME_None, RF_Transient);
+	// UStereoLayerComponent defaults to FaceLocked and a quad shape. Its relative
+	// transform is in view space, independent of the patient's movement/rotation.
+	VRFadeLayer->SetRelativeLocation(FVector(100.f, 0.f, 0.f));
+	VRFadeLayer->SetQuadSize(FVector2D(10000.f, 10000.f));
+	VRFadeLayer->SetPriority(MAX_int32);
+	VRFadeLayer->bLiveTexture = true;
+	VRFadeLayer->bNoAlphaChannel = false;
+	VRFadeLayer->bSupportsDepth = false;
+	VRFadeLayer->SetTexture(VRFadeTexture);
+	VRFadeLayer->RegisterComponent();
+	VRFadeLayer->AddTickPrerequisiteComponent(this);
+	SetComponentTickEnabled(true);
+	UE_LOG(LogTemp, Log, TEXT("PatientCinematic: Using face-locked stereo layer for mobile LDR fade."));
+	return true;
+}
+
+void UPatientCinematicComponent::UpdateVRFadeOverlay(float Opacity)
+{
+	if (!VRFadeLayer || !VRFadeTexture) return;
+	FLinearColor Color = FadeColor;
+	Color.A = FMath::Clamp(Opacity, 0.f, 1.f);
+	UKismetRenderingLibrary::ClearRenderTarget2D(this, VRFadeTexture, Color);
+}
+
+void UPatientCinematicComponent::DestroyVRFadeOverlay()
+{
+	SetComponentTickEnabled(false);
+	if (VRFadeLayer)
+	{
+		// DestroyComponent unregisters and removes the native compositor layer.
+		VRFadeLayer->DestroyComponent();
+		VRFadeLayer = nullptr;
+	}
+	VRFadeTexture = nullptr;
+}
+
+void UPatientCinematicComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
+{
+	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+	if (!VRFadeLayer || !GetWorld()) return;
+	const float Elapsed = GetWorld()->GetTimeSeconds() - FadeStartTime;
+	if (CurrentPhase == ECinematicPhase::FadingOut)
+	{
+		UpdateVRFadeOverlay(FadeOutDuration > KINDA_SMALL_NUMBER ? Elapsed / FadeOutDuration : 1.f);
+	}
+	else if (CurrentPhase == ECinematicPhase::FadingIn)
+	{
+		UpdateVRFadeOverlay(FadeInDuration > KINDA_SMALL_NUMBER ? 1.f - Elapsed / FadeInDuration : 0.f);
+	}
+}
+
+void UPatientCinematicComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	CancelCinematic();
+	Super::EndPlay(EndPlayReason);
+}
+
+void UPatientCinematicComponent::OnUnregister()
+{
+	CancelCinematic();
+	Super::OnUnregister();
 }
 
 void UPatientCinematicComponent::Initialize(USkeletalMeshComponent* InMesh, FName InPelvisBoneName)
@@ -61,6 +139,7 @@ void UPatientCinematicComponent::CancelCinematic()
 		static_cast<int32>(CurrentPhase));
 
 	ClearAllTimers();
+	DestroyVRFadeOverlay();
 
 	// If the screen is faded, restore it immediately.
 	if (CurrentPhase == ECinematicPhase::FadingOut ||
@@ -71,8 +150,7 @@ void UPatientCinematicComponent::CancelCinematic()
 		{
 			if (APlayerCameraManager* CameraManager = PC->PlayerCameraManager)
 			{
-				// Instant fade back to clear.
-				CameraManager->StartCameraFade(1.0f, 0.0f, 0.25f, FadeColor, false, false);
+				CameraManager->StopCameraFade();
 			}
 		}
 	}
@@ -87,7 +165,20 @@ void UPatientCinematicComponent::CancelCinematic()
 void UPatientCinematicComponent::BeginFadeOut()
 {
 	CurrentPhase = ECinematicPhase::FadingOut;
+	FadeStartTime = GetWorld()->GetTimeSeconds();
 	UE_LOG(LogTemp, Log, TEXT("PatientCinematic: Beginning fade out over %.1fs."), FadeOutDuration);
+
+	const IConsoleVariable* MobileHDR = IConsoleManager::Get().FindConsoleVariable(TEXT("r.MobileHDR"));
+	if (GEngine && GEngine->IsStereoscopic3D()
+		&& GetWorld()->GetFeatureLevel() <= ERHIFeatureLevel::ES3_1
+		&& MobileHDR && MobileHDR->GetInt() == 0)
+	{
+		if (!CreateVRFadeOverlay())
+		{
+			UE_LOG(LogTemp, Error, TEXT("PatientCinematic: Failed to create mobile VR fade overlay."));
+		}
+		UpdateVRFadeOverlay(0.f);
+	}
 
 	if (APlayerController* PC = UGameplayStatics::GetPlayerController(GetWorld(), 0))
 	{
@@ -99,6 +190,11 @@ void UPatientCinematicComponent::BeginFadeOut()
 	}
 
 	// Timer fires after FadeOutDuration when the screen is fully black.
+	if (FadeOutDuration <= KINDA_SMALL_NUMBER)
+	{
+		OnFadeOutComplete();
+		return;
+	}
 	GetWorld()->GetTimerManager().SetTimer(
 		FadeOutTimerHandle, this, &UPatientCinematicComponent::OnFadeOutComplete,
 		FadeOutDuration, false);
@@ -107,6 +203,7 @@ void UPatientCinematicComponent::BeginFadeOut()
 void UPatientCinematicComponent::OnFadeOutComplete()
 {
 	CurrentPhase = ECinematicPhase::HoldingBlack;
+	UpdateVRFadeOverlay(1.f);
 	UE_LOG(LogTemp, Log, TEXT("PatientCinematic: Screen is black. Repositioning patient."));
 
 	// Reposition and swap animation while the screen is black.
@@ -128,6 +225,8 @@ void UPatientCinematicComponent::OnFadeOutComplete()
 void UPatientCinematicComponent::BeginFadeIn()
 {
 	CurrentPhase = ECinematicPhase::FadingIn;
+	FadeStartTime = GetWorld()->GetTimeSeconds();
+	UpdateVRFadeOverlay(1.f);
 	UE_LOG(LogTemp, Log, TEXT("PatientCinematic: Beginning fade in over %.1fs."), FadeInDuration);
 
 	if (APlayerController* PC = UGameplayStatics::GetPlayerController(GetWorld(), 0))
@@ -140,6 +239,11 @@ void UPatientCinematicComponent::BeginFadeIn()
 	}
 
 	// Timer fires after FadeInDuration when the screen is fully clear.
+	if (FadeInDuration <= KINDA_SMALL_NUMBER)
+	{
+		OnFadeInComplete();
+		return;
+	}
 	GetWorld()->GetTimerManager().SetTimer(
 		FadeInTimerHandle, this, &UPatientCinematicComponent::OnFadeInComplete,
 		FadeInDuration, false);
@@ -147,6 +251,8 @@ void UPatientCinematicComponent::BeginFadeIn()
 
 void UPatientCinematicComponent::OnFadeInComplete()
 {
+	ClearAllTimers();
+	DestroyVRFadeOverlay();
 	CurrentPhase = ECinematicPhase::Idle;
 	UE_LOG(LogTemp, Log, TEXT("PatientCinematic: Cinematic sequence complete."));
 	OnCinematicComplete.Broadcast();

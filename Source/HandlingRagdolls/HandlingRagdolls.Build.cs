@@ -22,6 +22,7 @@ public class HandlingRagdolls : ModuleRules
 		});
 
 		PrivateDependencyModuleNames.AddRange(new string[] {
+			"RHI",
 			"AnimGraphRuntime",
 			"Slate",
 			"SlateCore"

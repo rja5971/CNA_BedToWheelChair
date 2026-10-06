@@ -8,6 +8,8 @@
 
 class USkeletalMeshComponent;
 class UAnimSequence;
+class UStereoLayerComponent;
+class UTextureRenderTarget2D;
 
 /** Phase tracking for the cinematic fade sequence. */
 UENUM(BlueprintType)
@@ -29,7 +31,8 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnCinematicComplete);
  * Intended to run after the patient's bed seated blend completes. Listens
  * for OnBedSeatedBlendComplete from USeatedTransitionComponent (wired in
  * PatientActor::BeginPlay) and orchestrates the screen fade using
- * APlayerCameraManager::StartCameraFade.
+ * APlayerCameraManager::StartCameraFade, with a compositor overlay for mobile
+ * VR when Mobile HDR is disabled (camera fades are not rendered in that path).
  */
 UCLASS(ClassGroup = (PatientCare), meta = (BlueprintSpawnableComponent))
 class HANDLINGRAGDOLLS_API UPatientCinematicComponent : public UActorComponent
@@ -118,7 +121,15 @@ public:
 	/** Set the mesh reference (called from PatientActor::BeginPlay). */
 	void Initialize(USkeletalMeshComponent* InMesh, FName InPelvisBoneName);
 
+	virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+	virtual void OnUnregister() override;
+
 private:
+	friend class FCNAPatientCinematicFadeTest;
+	bool CreateVRFadeOverlay();
+	void UpdateVRFadeOverlay(float Opacity);
+	void DestroyVRFadeOverlay();
 	void BeginFadeOut();
 	void OnFadeOutComplete();
 	void BeginFadeIn();
@@ -127,6 +138,12 @@ private:
 	void ClearAllTimers();
 
 	ECinematicPhase CurrentPhase = ECinematicPhase::Idle;
+	float FadeStartTime = 0.f;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UStereoLayerComponent> VRFadeLayer;
+	UPROPERTY(Transient)
+	TObjectPtr<UTextureRenderTarget2D> VRFadeTexture;
 
 	FTimerHandle PreFadeTimerHandle;
 	FTimerHandle FadeOutTimerHandle;

@@ -4,10 +4,14 @@
 #include "Components/BeltComponent.h"
 #include "Components/GrabComponent.h"
 #include "Components/SeatedTransitionComponent.h"
+#include "Components/PatientCinematicComponent.h"
+#include "Engine/TextureRenderTarget2D.h"
+#include "Kismet/KismetRenderingLibrary.h"
 #include "Components/WidgetComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Reliability/CNAReliabilityLibrary.h"
 #include "Engine/World.h"
+#include "TimerManager.h"
 #include "Engine/Blueprint.h"
 #include "Engine/Level.h"
 #include "FileHelpers.h"
@@ -61,6 +65,65 @@ bool FCNAPatientPhaseTest::RunTest(const FString& Parameters)
             TestEqual(TEXT("Locked belt exposes no handles"), Setup.Belt->GetGrabbableBoneNames().Num(), 0);
         }
     }
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCNAPatientCinematicFadeTest, "CNA.PatientInteraction.MobileVRFade", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FCNAPatientCinematicFadeTest::RunTest(const FString& Parameters)
+{
+    FInteractionTestWorld Setup;
+    UPatientCinematicComponent* Cinematic = Setup.Patient->GetPatientCinematicComponent();
+    Cinematic->PreFadeDelay = 0.f;
+    Cinematic->FadeOutDuration = 1.f;
+    Cinematic->BlackScreenHoldDuration = 1.f;
+    Cinematic->FadeInDuration = 1.f;
+
+    // Force the compositor backend in a rendered desktop test without requiring
+    // an attached headset. Read back the actual texture submitted to both eyes.
+    if (!TestTrue(TEXT("Runtime fade texture/layer can be created without cooked assets"), Cinematic->CreateVRFadeOverlay())) return false;
+    auto ReadOpacity = [&]()
+    {
+        return UKismetRenderingLibrary::ReadRenderTargetRawPixel(Cinematic, Cinematic->VRFadeTexture, 0, 0).A / 255.f;
+    };
+    Cinematic->StartCinematicSequence();
+    Cinematic->UpdateVRFadeOverlay(0.f);
+    TestEqual(TEXT("Overlay initially transparent"), ReadOpacity(), 0.f);
+    Cinematic->FadeStartTime = Setup.World->GetTimeSeconds() - .5f;
+    Cinematic->TickComponent(.5f, LEVELTICK_All, nullptr);
+    TestTrue(TEXT("Fade out submits half opacity"), FMath::IsNearlyEqual(ReadOpacity(), .5f, .01f));
+    Cinematic->OnFadeOutComplete();
+    TestEqual(TEXT("Reposition begins with fully opaque overlay"), ReadOpacity(), 1.f);
+    Cinematic->TickComponent(.5f, LEVELTICK_All, nullptr);
+    TestEqual(TEXT("Overlay remains opaque during black hold"), ReadOpacity(), 1.f);
+    Cinematic->BeginFadeIn();
+    Cinematic->FadeStartTime = Setup.World->GetTimeSeconds() - .5f;
+    Cinematic->TickComponent(.5f, LEVELTICK_All, nullptr);
+    TestTrue(TEXT("Fade in submits half opacity"), FMath::IsNearlyEqual(ReadOpacity(), .5f, .01f));
+    Cinematic->CancelCinematic();
+    TestFalse(TEXT("Cancellation stops sequence"), Cinematic->IsCinematicActive());
+    TestNull(TEXT("Cancellation destroys native layer component"), Cinematic->VRFadeLayer.Get());
+    TestNull(TEXT("Cancellation releases render target"), Cinematic->VRFadeTexture.Get());
+    TestFalse(TEXT("No idle tick overhead"), Cinematic->IsComponentTickEnabled());
+
+    // A new sequence must be able to create and retire another overlay.
+    TestTrue(TEXT("Overlay can be recreated for next attempt"), Cinematic->CreateVRFadeOverlay());
+    Cinematic->StartCinematicSequence();
+    Cinematic->OnFadeInComplete();
+    TestNull(TEXT("Normal completion destroys overlay"), Cinematic->VRFadeLayer.Get());
+    TestFalse(TEXT("Normal completion stops sequence"), Cinematic->IsCinematicActive());
+    Cinematic->ClearAllTimers();
+
+    TestTrue(TEXT("Overlay can be recreated before teardown"), Cinematic->CreateVRFadeOverlay());
+    Cinematic->StartCinematicSequence();
+    Cinematic->UnregisterComponent();
+    TestNull(TEXT("Component teardown destroys overlay"), Cinematic->VRFadeLayer.Get());
+    TestFalse(TEXT("Component teardown cancels timers"), Setup.World->GetTimerManager().IsTimerActive(Cinematic->FadeOutTimerHandle));
+
+    Cinematic->FadeOutDuration = 0.f;
+    Cinematic->BlackScreenHoldDuration = 0.f;
+    Cinematic->FadeInDuration = 0.f;
+    Cinematic->StartCinematicSequence();
+    TestFalse(TEXT("Zero-duration sequence completes instead of waiting on an inactive timer"), Cinematic->IsCinematicActive());
     return true;
 }
 

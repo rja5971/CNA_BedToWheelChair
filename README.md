@@ -122,6 +122,13 @@ The project includes automated validation tests covering input routing, media pl
 - `CNA.Reliability.Input.OpenXRStartupRegistration`: Confirms Enhanced Input registration priority and trigger binding validation.
 - `CNA.Reliability.Media.RecoveryPolicy`: Tests media startup timeouts, stall recovery, and retry behavior.
 - `CNA.Patient.Interaction`: Validates phase-based grab locking and transfer state transitions.
+- `CNA.PatientInteraction.MobileVRFade`: Rendered test of fade opacity, black hold, cancellation, completion, and teardown. Run with a rendering RHI (not `-nullrhi`).
+
+The bed cinematic uses a face-locked OpenXR stereo layer on mobile VR when
+`r.MobileHDR=False`. Camera-manager fades rely on post-processing and are not
+visible in the mobile LDR renderer. The overlay uses a small runtime RGBA texture,
+keeps the configured fade/hold timings, and is destroyed when the sequence ends or
+is cancelled. Desktop rendering continues to use the camera-manager fade.
 
 Tests can be executed via the Unreal Engine Session Frontend or via commandlet:
 ```powershell
