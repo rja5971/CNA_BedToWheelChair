@@ -34,6 +34,8 @@ void UBeltComponent::BeginPlay()
 bool UBeltComponent::AttachToPatient(AActor* PatientActor)
 {
 	if (!PatientActor || IsAttached()) return false;
+	if (const ABeltActor* Belt = Cast<ABeltActor>(GetOwner()))
+		if (!Belt->IsGrabInteractionEnabled()) return false;
 
 	// Check if the patient supports belt attachment
 	IIBeltAttachable* BeltTarget = Cast<IIBeltAttachable>(PatientActor);
@@ -76,6 +78,7 @@ bool UBeltComponent::AttachToPatient(AActor* PatientActor)
 
 	// Store reference and notify
 	AttachedPatient = PatientActor;
+	if (ABeltActor* Belt = Cast<ABeltActor>(Owner)) Belt->SetInteractionPatient(Cast<APatientActor>(PatientActor));
 	BeltTarget->OnBeltAttached(this);
 	OnBeltAttachedToPatient.Broadcast(PatientActor);
 
@@ -121,6 +124,8 @@ bool UBeltComponent::CanHandleBeGrabbed(FName HandleName, FVector GrabLocation) 
 {
 	// Belt can only be grabbed if it's attached to a patient
 	if (!IsAttached()) return false;
+	if (const ABeltActor* Belt = Cast<ABeltActor>(GetOwner()))
+		if (!Belt->IsGrabInteractionEnabled()) return false;
 
 	// Only the handles can be grabbed
 	return HandleName == LeftHandleName || HandleName == RightHandleName;
@@ -128,7 +133,9 @@ bool UBeltComponent::CanHandleBeGrabbed(FName HandleName, FVector GrabLocation) 
 
 void UBeltComponent::OnHandleGrabbed(UGrabComponent* Grabber, FName HandleName, FVector GrabLocation)
 {
-	if (!Grabber) return;
+	if (!Grabber || !IsAttached() || ActiveGrabbers.Contains(Grabber)) return;
+	if (const ABeltActor* Belt = Cast<ABeltActor>(GetOwner()))
+		if (!Belt->IsGrabInteractionEnabled()) return;
 
 	bFinalHandleReleasePending = false;
 	ActiveGrabbers.Add(Grabber, HandleName);
@@ -166,18 +173,18 @@ void UBeltComponent::OnHandleGrabbed(UGrabComponent* Grabber, FName HandleName, 
 
 void UBeltComponent::OnHandleReleased(UGrabComponent* Grabber)
 {
-	// Retiring a loose-belt constraint after attachment is not a carry-handle
-	// release. Ignore callbacks from hands which never acquired an attached handle.
-	if (!Grabber || !ActiveGrabbers.Contains(Grabber)) return;
-	ActiveGrabbers.Remove(Grabber);
+	if (!Grabber || ActiveGrabbers.Remove(Grabber) == 0) return;
+	const bool bCancelled = Grabber->IsInteractionCancellation();
 	if (APatientActor* PatientActor = Cast<APatientActor>(AttachedPatient))
 	{
 		if (UPatientCarryComponent* Carry = PatientActor->GetPatientCarryComponent())
 		{
-			Carry->EndCarry(Grabber);
+			if (bCancelled) Carry->PrepareForSeating();
+			else Carry->EndCarry(Grabber);
 		}
 	}
-	if (ActiveGrabbers.Num() == 0)
+	if (bCancelled) bFinalHandleReleasePending = false;
+	else if (ActiveGrabbers.Num() == 0)
 	{
 		bFinalHandleReleasePending = true;
 		UE_LOG(LogTemp, Log, TEXT("BeltComponent: Final handle released; seating request armed."));

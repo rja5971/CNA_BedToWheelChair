@@ -33,13 +33,7 @@ enum class EPatientBoneRole : uint8
 	ThighLeft		UMETA(DisplayName = "Thigh Left"),
 	ThighRight		UMETA(DisplayName = "Thigh Right"),
 	KneeLeft		UMETA(DisplayName = "Knee Left"),
-	KneeRight		UMETA(DisplayName = "Knee Right"),
-	ForearmLeft      UMETA(DisplayName = "Forearm Left"),
-	ForearmRight     UMETA(DisplayName = "Forearm Right"),
-	HandLeft         UMETA(DisplayName = "Hand Left"),
-	HandRight        UMETA(DisplayName = "Hand Right"),
-	FootLeft         UMETA(DisplayName = "Foot Left"),
-	FootRight        UMETA(DisplayName = "Foot Right")
+	KneeRight		UMETA(DisplayName = "Knee Right")
 };
 
 /**

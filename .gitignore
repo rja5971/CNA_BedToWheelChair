@@ -86,5 +86,9 @@ Thumbs.db
 ehthumbs.db
 [Dd]esktop.ini
 
-# Developer Logs
+# Markdown files and developer documentation (only README.md is tracked)
+*.md
+**/*.md
+!README.md
+docs/
 devlog.md

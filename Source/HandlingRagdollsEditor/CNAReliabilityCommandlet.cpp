@@ -23,6 +23,13 @@
 #include "K2Node_ComponentBoundEvent.h"
 #include "K2Node_CallDelegate.h"
 #include "K2Node_Self.h"
+#include "K2Node_IfThenElse.h"
+#include "K2Node_VariableGet.h"
+#include "K2Node_VariableSet.h"
+#include "K2Node_FunctionEntry.h"
+#include "FileHelpers.h"
+#include "Patient/PatientActor.h"
+#include "Transfer/BeltActor.h"
 #include "EdGraphSchema_K2.h"
 #include "Kismet2/KismetEditorUtilities.h"
 #include "InputMappingContext.h"
@@ -295,6 +302,113 @@ void MigrateCursorMenu()
     CompileAndSave(Menu);
 }
 
+void GuardPatientConversation(UBlueprint* BP, UEdGraphNode* Entry, bool bWidget)
+{
+    UEdGraph* Graph = Entry->GetGraph();
+    UEdGraphPin* Then = Entry->FindPin(UEdGraphSchema_K2::PN_Then);
+    Require(Then != nullptr, TEXT("Patient conversation entry has no execution output"));
+    for (UEdGraphPin* Link : Then->LinkedTo)
+        if (Link->GetOwningNode()->NodeComment == TEXT("PatientConversationPolicy")) return;
+    TArray<UEdGraphPin*> Next = Then->LinkedTo;
+    Then->BreakAllPinLinks();
+    UK2Node_CallFunction* Apply = LibraryCall(Graph, TEXT("ApplyPatientConversationPolicy"), Entry->NodePosX + 220, Entry->NodePosY - 160);
+    Apply->NodeComment = TEXT("PatientConversationPolicy");
+    UK2Node_CallFunction* Enabled = LibraryCall(Graph, TEXT("IsPatientConversationEnabled"), Entry->NodePosX + 220, Entry->NodePosY - 300);
+    UK2Node_IfThenElse* Gate = NewObject<UK2Node_IfThenElse>(Graph);
+    Graph->AddNode(Gate, false, false); Gate->CreateNewGuid(); Gate->PostPlacedNewNode(); Gate->AllocateDefaultPins();
+    Gate->NodePosX = Entry->NodePosX + 450; Gate->NodePosY = Entry->NodePosY;
+    if (bWidget)
+    {
+        UK2Node_VariableGet* Owner = NewObject<UK2Node_VariableGet>(Graph);
+        Owner->VariableReference.SetSelfMember(TEXT("OwningActor")); Graph->AddNode(Owner, false, false);
+        Owner->CreateNewGuid(); Owner->PostPlacedNewNode(); Owner->AllocateDefaultPins();
+        Connect(Owner->FindPin(TEXT("OwningActor")), Apply->FindPin(TEXT("ChatActor")));
+        Connect(Owner->FindPin(TEXT("OwningActor")), Enabled->FindPin(TEXT("ChatActor")));
+    }
+    else
+    {
+        ConnectSelf(Graph, Apply, TEXT("ChatActor")); ConnectSelf(Graph, Enabled, TEXT("ChatActor"));
+    }
+    Connect(Then, Apply->GetExecPin()); Connect(Apply->GetThenPin(), Gate->GetExecPin());
+    Connect(Enabled->FindPin(UEdGraphSchema_K2::PN_ReturnValue), Gate->GetConditionPin());
+    for (UEdGraphPin* Link : Next) Connect(Gate->GetThenPin(), Link);
+}
+
+void DisablePatientConversation()
+{
+    const FString BackupDir = FPaths::ProjectSavedDir() / TEXT("InteractionLocks/BeforeChanges-2026-10-06/Content");
+    for (const TCHAR* Path : { TEXT("/Game/Project/Blueprints/Actors/BP_PatientChat"), TEXT("/Game/Project/Blueprints/UI/WBP_PatientChat"), TEXT("/Game/Project/Maps/CNA_Map_01") })
+    {
+        const bool bMap = FString(Path).EndsWith(TEXT("CNA_Map_01"));
+        const FString Ext = bMap ? FPackageName::GetMapPackageExtension() : FPackageName::GetAssetPackageExtension();
+        const FString Source = FPackageName::LongPackageNameToFilename(Path, Ext);
+        const FString Backup = BackupDir / (FString(Path).RightChop(6) + Ext);
+        IFileManager::Get().MakeDirectory(*FPaths::GetPath(Backup), true);
+        if (!IFileManager::Get().FileExists(*Backup)) Require(IFileManager::Get().Copy(*Backup, *Source) == COPY_OK, TEXT("Patient conversation backup failed"));
+    }
+    UBlueprint* Chat = Blueprint(TEXT("/Game/Project/Blueprints/Actors/BP_PatientChat"));
+    const FName FlagName(TEXT("bEnablePatientConversation"));
+    if (!FindFProperty<FBoolProperty>(Chat->GeneratedClass, FlagName))
+    {
+        FEdGraphPinType Type; Type.PinCategory = UEdGraphSchema_K2::PC_Boolean;
+        Require(FBlueprintEditorUtils::AddMemberVariable(Chat, FlagName, Type, TEXT("true")), TEXT("Could not add conversation enable flag"));
+        for (FBPVariableDescription& Variable : Chat->NewVariables)
+            if (Variable.VarName == FlagName) Variable.PropertyFlags = CPF_Edit | CPF_BlueprintVisible;
+    }
+    TArray<UEdGraph*> Graphs; Chat->GetAllGraphs(Graphs);
+    for (UEdGraph* Graph : Graphs)
+    {
+        TArray<UEdGraphNode*> Entries;
+        for (UEdGraphNode* Node : Graph->Nodes)
+        {
+            if (UK2Node_CustomEvent* Event = Cast<UK2Node_CustomEvent>(Node))
+                if (Event->CustomFunctionName == TEXT("EnableChatPanel")) Entries.Add(Node);
+            if (Cast<UK2Node_FunctionEntry>(Node) && Graph->GetName() == TEXT("EnableChatPanel")) Entries.Add(Node);
+        }
+        for (UEdGraphNode* Entry : Entries) GuardPatientConversation(Chat, Entry, false);
+        // Retain widget creation and OwningActor assignment on BeginPlay, then apply the flag.
+        const auto ExistingNodes = Graph->Nodes;
+        for (UEdGraphNode* Node : ExistingNodes)
+        {
+            UK2Node_VariableSet* Set = Cast<UK2Node_VariableSet>(Node);
+            if (!Set || Set->VariableReference.GetMemberName() != TEXT("OwningActor")) continue;
+            UEdGraphPin* Then = Set->FindPin(UEdGraphSchema_K2::PN_Then);
+            bool bGuarded = false;
+            for (UEdGraphPin* Link : Then->LinkedTo) bGuarded |= Link->GetOwningNode()->NodeComment == TEXT("PatientConversationPolicy");
+            if (bGuarded) continue;
+            TArray<UEdGraphPin*> Next = Then->LinkedTo; Then->BreakAllPinLinks();
+            UK2Node_CallFunction* Apply = LibraryCall(Graph, TEXT("ApplyPatientConversationPolicy"), Node->NodePosX + 240, Node->NodePosY);
+            Apply->NodeComment = TEXT("PatientConversationPolicy"); ConnectSelf(Graph, Apply, TEXT("ChatActor"));
+            Connect(Then, Apply->GetExecPin()); for (UEdGraphPin* Link : Next) Connect(Apply->GetThenPin(), Link);
+        }
+    }
+    CompileAndSave(Chat);
+    UBlueprint* Widget = Blueprint(TEXT("/Game/Project/Blueprints/UI/WBP_PatientChat"));
+    Graphs.Reset(); Widget->GetAllGraphs(Graphs);
+    for (UEdGraph* Graph : Graphs)
+    {
+        TArray<UEdGraphNode*> Entries;
+        for (UEdGraphNode* Node : Graph->Nodes)
+            if (UK2Node_ComponentBoundEvent* Event = Cast<UK2Node_ComponentBoundEvent>(Node))
+                if (Event->DelegatePropertyName == TEXT("OnClicked")) Entries.Add(Node);
+        for (UEdGraphNode* Entry : Entries) GuardPatientConversation(Widget, Entry, true);
+    }
+    CompileAndSave(Widget);
+    UWorld* World = UEditorLoadingAndSavingUtils::LoadMap(TEXT("/Game/Project/Maps/CNA_Map_01"));
+    Require(World != nullptr, TEXT("Could not load training map"));
+    int32 Count = 0;
+    for (AActor* Actor : World->PersistentLevel->Actors)
+    {
+        if (!Actor || Actor->GetClass() != Chat->GeneratedClass) continue;
+        FBoolProperty* Flag = FindFProperty<FBoolProperty>(Actor->GetClass(), FlagName);
+        Require(Flag != nullptr, TEXT("Conversation flag missing")); Flag->SetPropertyValue_InContainer(Actor, false);
+        UCNAReliabilityLibrary::ApplyPatientConversationPolicy(Actor); ++Count;
+    }
+    Require(Count == 1, TEXT("Expected one placed patient conversation actor"));
+    Require(UEditorLoadingAndSavingUtils::SaveMap(World, TEXT("/Game/Project/Maps/CNA_Map_01")), TEXT("Could not save patient UI override"));
+    UE_LOG(LogTemp, Display, TEXT("CNA_PATIENT_UI: conversation disabled; actor/widget references retained"));
+}
+
 void MigrateMedia()
 {
     UBlueprint* Display = Blueprint(TEXT("/Game/Project/Blueprints/Actors/BP_MediaDisplay"));
@@ -373,6 +487,7 @@ int32 UCNAReliabilityCommandlet::Main(const FString& Params)
             MigrateMedia();
         }
         if (FParse::Param(*Params, TEXT("FixCursorMenu"))) MigrateCursorMenu();
+        if (FParse::Param(*Params, TEXT("DisablePatientConversation"))) DisablePatientConversation();
         for (const TCHAR* Path : { TEXT("/Game/VRTemplate/Blueprints/VRPawn"), TEXT("/Game/VRTemplate/Blueprints/Menu"), TEXT("/Game/VRTemplate/Blueprints/WidgetMenu"), TEXT("/Game/Project/Blueprints/Actors/BP_MediaDisplay"), TEXT("/Game/Project/Blueprints/Actors/BP_MediaEventHandler"), TEXT("/Game/Project/Blueprints/UI/WBP_MediaText") })
         {
             UBlueprint* BP = Blueprint(Path);

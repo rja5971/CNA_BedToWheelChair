@@ -24,7 +24,6 @@ class USeatedTransitionComponent;
 class UCooperationRampComponent;
 class UPatientCarryComponent;
 class UPatientCinematicComponent;
-class UPatientBedSupportComponent;
 class AWheelchairActor;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnPatientStateChanged, EPatientState, NewState);
@@ -69,12 +68,13 @@ public:
 	virtual TArray<FName> GetGrabbableBoneNames() const override;
 	virtual FName GetGrabBoneOverride() const override { return NAME_None; }
 	virtual bool RequiresRotationConstraint() const override { return false; }
-	UFUNCTION(BlueprintPure, Category = "Patient|Bed")
-	UPatientBedSupportComponent* GetBedSupportComponent() const { return BedSupport; }
-	virtual bool IsBedSeated() const override;
-	void NotifyBedSeated();
-	void PrepareForBeltCarry();
-	void RefreshBedGrabRegions();
+	virtual bool IsGrabInteractionEnabled() const override;
+	UFUNCTION(BlueprintPure, Category = "Patient|Interaction")
+	EPatientInteractionPhase GetInteractionPhase() const { return InteractionPhase; }
+	UFUNCTION(BlueprintPure, Category = "Patient|Interaction")
+	bool CanGrabBelt() const;
+	/** Transition callbacks call this before giving animation ownership of the body. */
+	void SetInteractionPhase(EPatientInteractionPhase Phase);
 
 	// ============================================================
 	// IBeltAttachable Implementation
@@ -235,9 +235,6 @@ protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Patient")
 	TObjectPtr<UPatientCinematicComponent> PatientCinematic;
 
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Patient|Bed")
-	TObjectPtr<UPatientBedSupportComponent> BedSupport;
-
 	// ============================================================
 	// Configuration
 	// ============================================================
@@ -306,6 +303,7 @@ protected:
 	TArray<EPatientBoneRole> NeckSupportRoles;
 
 private:
+	EPatientInteractionPhase InteractionPhase = EPatientInteractionPhase::BedPreparation;
 	/** Current simulation state */
 	EPatientState CurrentState = EPatientState::LyingDown;
 
@@ -353,6 +351,8 @@ private:
 	/** Called when the bed seated blend finishes — starts the cinematic sequence. */
 	UFUNCTION()
 	void OnBedSeatedBlendFinished();
+	UFUNCTION()
+	void OnBedCinematicFinished();
 
 	/** Find the state config matching a given state; returns nullptr if none */
 	UPatientStateConfig* FindStateConfig(EPatientState State) const;

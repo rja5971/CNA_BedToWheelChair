@@ -1,6 +1,7 @@
 // Fill out your copyright notice in the Description page of Project Settings.
 
 #include "SeatedTransitionComponent.h"
+#include "../Patient/PatientActor.h"
 #include "PatientPhysicsComponent.h"
 #include "Animation/AnimInstance.h"
 #include "Animation/AnimSequence.h"
@@ -93,6 +94,12 @@ void USeatedTransitionComponent::BeginSeatedSettle()
 {
 	UAnimSequence* BedAnim = BedSeatedAnimation ? BedSeatedAnimation : SeatedAnimation;
 	if (!BedAnim || !Mesh || !PhysicsComp) return;
+	if (APatientActor* Patient = Cast<APatientActor>(GetOwner()))
+	{
+		if (Patient->GetInteractionPhase() == EPatientInteractionPhase::Complete
+			|| Patient->GetInteractionPhase() == EPatientInteractionPhase::WheelchairSeating) return;
+		Patient->SetInteractionPhase(EPatientInteractionPhase::BedSeating);
+	}
 
 	bHasSeatTarget = false;
 	FName PelvisBone = ResolveBoneName(EPatientBoneRole::Pelvis);
@@ -217,6 +224,8 @@ void USeatedTransitionComponent::StartBlend(const FTransform* SeatTarget)
 	}
 
 	bHasSeatTarget = SeatTarget != nullptr;
+	if (APatientActor* Patient = Cast<APatientActor>(GetOwner()))
+		Patient->SetInteractionPhase(bHasSeatTarget ? EPatientInteractionPhase::WheelchairSeating : EPatientInteractionPhase::BedSeating);
 	if (SeatTarget) TargetSeatTransform = *SeatTarget;
 
 	PhysicsComp->ClearHeldPose();
@@ -260,6 +269,8 @@ void USeatedTransitionComponent::SnapToAnimationAtTarget(const FTransform& SeatT
 		return;
 	}
 
+	if (APatientActor* Patient = Cast<APatientActor>(GetOwner()))
+		Patient->SetInteractionPhase(EPatientInteractionPhase::WheelchairSeating);
 	bBlending = false;
 	bHasSeatTarget = true;
 	TargetSeatTransform = SeatTarget;

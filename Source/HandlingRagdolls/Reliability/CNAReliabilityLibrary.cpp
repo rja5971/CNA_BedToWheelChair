@@ -10,8 +10,32 @@
 #include "Kismet/KismetSystemLibrary.h"
 #include "HeadMountedDisplayFunctionLibrary.h"
 #include "UObject/UnrealType.h"
+#include "Components/WidgetComponent.h"
+#include "Blueprint/UserWidget.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogCNARecovery, Log, All);
+
+bool UCNAReliabilityLibrary::IsPatientConversationEnabled(AActor* ChatActor)
+{
+    const FBoolProperty* Flag = IsValid(ChatActor)
+        ? FindFProperty<FBoolProperty>(ChatActor->GetClass(), TEXT("bEnablePatientConversation")) : nullptr;
+    return Flag && Flag->GetPropertyValue_InContainer(ChatActor);
+}
+
+void UCNAReliabilityLibrary::ApplyPatientConversationPolicy(AActor* ChatActor)
+{
+    UWidgetComponent* Panel = Cast<UWidgetComponent>(ObjectProperty(ChatActor, TEXT("ChatPanel")));
+    if (!Panel) return;
+    const bool bEnabled = IsPatientConversationEnabled(ChatActor);
+    Panel->SetHiddenInGame(!bEnabled);
+    Panel->SetCollisionEnabled(bEnabled ? ECollisionEnabled::QueryOnly : ECollisionEnabled::NoCollision);
+    if (!bEnabled) Panel->SetVisibility(false);
+    if (UUserWidget* Widget = Panel->GetUserWidgetObject())
+    {
+        Widget->SetIsEnabled(bEnabled);
+        Widget->SetVisibility(bEnabled ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+    }
+}
 
 UObject* UCNAReliabilityLibrary::ObjectProperty(const UObject* Object, FName Name)
 {

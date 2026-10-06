@@ -24,6 +24,9 @@ class HANDLINGRAGDOLLS_API IIGrabbable
 	GENERATED_BODY()
 
 public:
+	/** Phase permission, also checked while held. Other grabbables remain enabled. */
+	virtual bool IsGrabInteractionEnabled() const { return true; }
+
 	/** Check if this object can be grabbed at the specified bone/location */
 	virtual bool CanBeGrabbed(FName BoneName, FVector GrabLocation) const = 0;
 

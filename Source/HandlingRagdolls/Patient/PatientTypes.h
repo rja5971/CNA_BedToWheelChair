@@ -6,6 +6,17 @@
 #include "Engine/DataAsset.h"
 #include "PatientTypes.generated.h"
 
+/** Interaction ownership is independent of the shared bed/chair Seated state. */
+UENUM(BlueprintType)
+enum class EPatientInteractionPhase : uint8
+{
+	BedPreparation,
+	BedSeating,
+	BeltTransfer,
+	WheelchairSeating,
+	Complete
+};
+
 /**
  * Body regions that can be interacted with on the patient.
  */

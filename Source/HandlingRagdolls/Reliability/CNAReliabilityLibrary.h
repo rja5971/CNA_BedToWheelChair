@@ -24,6 +24,10 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category="CNA|UI")
 	static void StopMenuInteraction(AActor* Menu);
+	UFUNCTION(BlueprintPure, Category="CNA|Patient UI")
+	static bool IsPatientConversationEnabled(AActor* ChatActor);
+	UFUNCTION(BlueprintCallable, Category="CNA|Patient UI")
+	static void ApplyPatientConversationPolicy(AActor* ChatActor);
 
 	static UObject* ObjectProperty(const UObject* Object, FName Name);
 	static void CallNoArgs(UObject* Object, FName Function);

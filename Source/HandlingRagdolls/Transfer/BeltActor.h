@@ -11,6 +11,7 @@ class UBeltComponent;
 class UStaticMeshComponent;
 class USceneComponent;
 class USphereComponent;
+class APatientActor;
 
 /**
  * Belt Actor — the physical transfer belt that the nurse attaches to the patient.
@@ -47,6 +48,9 @@ public:
 	virtual FName GetGrabBoneOverride() const override;
 	virtual bool RequiresRotationConstraint() const override;
 	virtual bool ShouldUsePhysicsHandle() const override;
+	virtual bool IsGrabInteractionEnabled() const override;
+	void SetInteractionPatient(APatientActor* Patient) { InteractionPatient = Patient; }
+	APatientActor* GetInteractionPatient() const;
 
 	/** Get the belt component */
 	UFUNCTION(BlueprintCallable, Category = "Belt")
@@ -88,6 +92,8 @@ protected:
 	bool bShowDetectionRadius = false;
 
 private:
+	UPROPERTY()
+	TObjectPtr<APatientActor> InteractionPatient;
 	/** Whether the belt is currently being held by the nurse */
 	bool bIsBeingCarried = false;
 };
