@@ -541,9 +541,11 @@ void APatientActor::SetPatientState(EPatientState NewState)
 	else if (InteractionPhase == EPatientInteractionPhase::Complete && NewState != EPatientState::Seated) return;
 	if ((NewState == EPatientState::BeingLifted || NewState == EPatientState::BeingTransferred)
 		&& InteractionPhase == EPatientInteractionPhase::BedPreparation)
+	{
 		SetInteractionPhase(EPatientInteractionPhase::BeltTransfer);
+	}
 	// If the patient enters the seated state on the bed, we lock out physics permanently for the rest of the workflow.
-		if (NewState == EPatientState::Seated)
+	if (NewState == EPatientState::Seated)
 	{
 		bIsPureAnimationDriven = true;
 

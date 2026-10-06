@@ -1,54 +1,129 @@
 # CNA Bed To Wheelchair - Patient Transfer System
 
+A high-fidelity Unreal Engine 5.5 VR training simulation designed for Certified Nursing Assistant (CNA) education, guiding healthcare trainees through a safe, belt-assisted patient transfer from a hospital bed into a wheelchair.
+
+---
+
 ## Overview
 
-This Unreal Engine 5.5 VR training simulation guides a belt-assisted patient transfer from bed to wheelchair. Bed preparation remains physics-driven; belt carrying and final wheelchair seating use stable animation-owned modes.
+The transfer simulation combines physically simulated patient ragdoll interactions with smooth animation transitions:
+- **Bed Preparation**: Physics-driven patient interaction allowing realistic physical support and bed sit-up.
+- **Belt Carry**: Kinematic billboard carrying driven by motion controller handles, maintaining patient stability without physics tearing or rubber-banding.
+- **Wheelchair Seating**: Multi-chair detection, approach latching, and direct animated seating alignment (`SittingIdle_1__UE`).
 
-## Core Systems
+---
 
-- **Patient physics (`PatientPhysicsComponent`)**: Owns state-driven Anchored, Pivot, Stiff, and Free body behavior, physical-animation profiles, mass, damping, and safe physics recovery.
-- **Transfer belt (`BeltActor`, `BeltComponent`)**: Auto-attaches to the patient's configured spine bone and provides the VR grab lifecycle for carrying and final release.
-- **Kinematic billboard carry (`PatientCarryComponent`)**: Validates and loops an upright carry animation, disables patient body simulation, aligns the belt handle to the active VR hand anchor every frame, and rotates the whole patient around world Z to face the actual headset. The former physics-handle carry remains the fallback when no compatible animation is assigned.
-- **VR grabbing (`GrabComponent`, `IGrabbable`)**: VR interaction leverages a highly-stiff `UPhysicsHandleComponent` combined with dynamic muscle relaxation. When grabbed, the patient's physical animation motors are temporarily disabled (Limp), allowing a 100,000-stiffness physics handle to smoothly lift a 70kg patient without physics tearing or rubber-banding.
-- **Seated transition (`SeatedTransitionComponent`)**: Detects the original physical bed sit-up, then plays the bed seated animation and black fade/reposition sequence. Final wheelchair release disables ragdoll control, aligns the animated pelvis exactly to the selected chair's `SeatTarget`, applies the calibrated `-180 degree` skeletal yaw, and plays `/Game/Animations/SittingIdle_1__UE` at full weight.
-- **Direct seated animation**: Final seating uses `AnimationSingleNode` playback of `/Game/Animations/SittingIdle_1__UE`; there is no seated animation blueprint or foot-IK layer in the runtime path.
-- **Two-zone multi-chair handoff**: Every `WheelchairActor` owns an oriented `ApproachZone`, smaller `SeatZone`, and exact `SeatTarget`. Entering a ready chair's approach area latches it immediately; releasing the final belt handle in its commit zone starts seating. Duplicate or unavailable chairs cannot steal selection, and release is consumed only after a valid match.
+## Core Systems & Architecture
+
+### 1. Patient Physics (`PatientPhysicsComponent`, `PatientActor`)
+- Owns state-driven physical behaviors: `Anchored`, `Pivot`, `Stiff`, and `Free`.
+- Dynamic muscle relaxation: When grabbed, physical animation motors are adjusted to allow a stiff physics handle to smoothly lift the 70kg patient model without solver explosions.
+- Safe physics recovery: Enforces orientation sanity checks and restore grace periods when interactions end.
+
+### 2. Transfer Belt (`BeltActor`, `BeltComponent`)
+- Automatically aligns and attaches to the patient's spine bone.
+- Exposes dual VR grab handles for single-hand or dual-hand carrying.
+- Provides lifecycle callbacks that drive the transfer state machine.
+
+### 3. Kinematic Billboard Carry (`PatientCarryComponent`)
+- Loops an upright patient carry animation while temporarily disabling ragdoll physics simulation.
+- Aligns the belt handle to the active VR hand anchor every frame.
+- Automatically calculates smooth yaw rotation around world Z to face the VR headset, ensuring natural positioning while carrying.
+- Physics-handle carry remains as a safe fallback if no compatible animation is assigned.
+
+### 4. VR Grabbing & Input Routing (`GrabComponent`, `VRWidgetInputComponent`, `IGrabbable`)
+- Implements `IGrabbable` across all interactive actors (patient, belt handles, UI widgets).
+- Enhanced Input integration (`IMC_Menu`, `IMC_UIInteract`) registered at startup to ensure OpenXR action set creation on Meta Quest.
+- Both controller triggers use a calibrated 0.5 activation threshold with explicit press/release pairing to eliminate stuck inputs.
+
+### 5. Seated Transition & Wheelchair Handoff (`SeatedTransitionComponent`, `WheelchairActor`)
+- Detects torso upright angles on the bed, triggers the bed seated settle, and runs the fade sequence.
+- **Two-Zone Recognition**: Each wheelchair defines an oriented `ApproachZone`, a tighter `SeatZone`, and an exact `SeatTarget`.
+- Entering a ready chair's approach zone latches it; releasing the belt within the commit zone transitions the patient directly into chair seating.
+- Final seating uses direct `AnimationSingleNode` playback of `/Game/Animations/SittingIdle_1__UE`, cleanly aligning the pelvis transform to `SeatTarget`.
+
+---
+
+## Interaction Lifecycle & Permissions
+
+To prevent physics desynchronization and invalid player actions during key stages, interaction permissions are controlled via `EPatientInteractionPhase`:
+
+| Phase | Description | Patient Grabs | Belt Grabs |
+|---|---|:---:|:---:|
+| **`BedPreparation`** | Initial patient positioning and sit-up | Allowed (Head/Neck) | Allowed (Attachment rules) |
+| **`BedSeating`** | Upright bed settle, pre-fade, and screen fade | **Locked** | **Locked** |
+| **`BeltTransfer`** | Post-rotation, belt attachment, and carry | **Locked** | Allowed |
+| **`WheelchairSeating`** | Transferring and settling into wheelchair | **Locked** | **Locked** |
+| **`Complete`** | Successfully seated in wheelchair | **Locked** | **Locked** |
+
+- Transitioning phases cancels active hand grabs on locked objects and clears hand ownership safely.
+- Completion remains locked after score/task updates to prevent disrupting the final seated patient.
+
+---
 
 ## Validated Runtime Flow
 
-`Idle -> Neck Support -> Belt Attach -> Kinematic Belt Carry -> Ready-Chair Recognition -> Release in Seat Commit Zone -> Seated Animation -> Complete`
+```text
+[Idle] 
+  ↓ (Support head/neck)
+[Bed Preparation & Sit-Up] 
+  ↓ (Torso crosses upright threshold)
+[Bed Seated Settle & Fade] 
+  ↓ (Rotate patient to bed edge)
+[Gait Belt Attachment] 
+  ↓ (Grab handles & lift)
+[Kinematic Belt Carry] 
+  ↓ (Approach wheelchair)
+[Chair Approach Recognition] 
+  ↓ (Release handles in Seat Commit Zone)
+[Wheelchair Seated Animation] 
+  ↓
+[Transfer Complete]
+```
 
-Billboard carrying, re-grab/release, oriented chair recognition, rotated-chair detection,
-release-driven direct seated playback, and pelvis attachment to `SeatTarget` have passed
-VR testing. Releasing away from a valid chair also restores patient physics after the
-carry grace period. `CNABedToWheelchairEditor Win64 Development` compiles and links
-successfully.
+---
 
-## Documentation
+## UI, Menu & Media Systems
 
-- Architecture: `docs/RAGDOLL_ARCHITECTURE.md`
-- Setup and migration: `docs/RAGDOLL_MIGRATION.md`
-- Meta Quest client build: `docs/META_QUEST_BUILD.md`
-- Development history: `devlog.md`
-- VR locomotion: `docs/VR_Locomotion_Guide.md`
-- Menu input and bathroom video recovery: `docs/MENU_MEDIA_RECOVERY.md`
-- Patient grab locks and room conversation toggle: `docs/PATIENT_INTERACTION_LOCKS.md`
+- **Menu Cursor Routing (`UMenuCursorInteraction`)**: The in-game pause/recovery menu features a dedicated cursor dot centered on initialization. The opening hand (left or right) exclusively owns thumbstick navigation and trigger clicks for that session.
+- **Media Reliability (`TrainingMediaControllerComponent`)**: Controls shared training display playback with a 10-second startup deadline, 5-second stall detection, automatic retry budgets, and a native retry widget to handle device video decoder delays.
+- **Patient Conversation Toggle**: `BP_PatientChat` contains an editable `bEnablePatientConversation` flag. When disabled, the actor cleanly hides UI panels and skips conversation prompts to allow direct physical transfer training without blocking.
 
-## Current Delivery Focus
+---
 
-The October 5 patient bed/grab overhaul has been rolled back to the prior
-interaction workflow. UI trigger clicks, opening-hand ownership of the menu's
-three buttons, and bathroom video recovery remain enabled. On October 6, 2026,
-the user confirmed the current changes are "working perfectly fine." User
-acceptance is complete; final Android packaging remains a separate delivery step.
+## Project Structure
 
-Explicit interaction phases now lock both patient and belt during bed seating
-and the black fade. After rotation only the belt is grabbable; wheelchair
-seating/completion lock both. The room-entry patient conversation screen is
-temporarily disabled without gating physical transfer startup. See
-[patient interaction locks](docs/PATIENT_INTERACTION_LOCKS.md) for restoration
-instructions and current validation.
+```text
+Source/
+  HandlingRagdolls/
+    Components/       # Belt, Grab, PatientCarry, SeatedTransition components
+    Interfaces/       # IGrabbable and interaction interfaces
+    Patient/          # APatientActor, physics profiles, interaction phases
+    Reliability/      # VR input component, menu cursor, media playback recovery
+    StateMachine/     # Transfer workflow and state management
+    Transfer/         # ABeltActor, TransferManagerActor
+  HandlingRagdollsEditor/
+    # Commandlets, asset inspectors, and editor automation tests
+Config/
+  DefaultGame.ini     # Project metadata and packaging directories
+  DefaultInput.ini    # Enhanced Input bindings and OpenXR action mappings
+Content/
+  Project/            # Blueprints, Maps (CNA_Map_01), Media, and Materials
+  VRTemplate/         # VR Pawn, Motion Controllers, Input Contexts
+```
 
-The earlier `Builds/Quest/NaturalPatientCare` APK contains the superseded patient
-overhaul. Backups of the removed implementation and affected assets are in
-`Saved/PatientWorkflowRollback/2026-10-06`.
+---
+
+## Testing & Automation
+
+The project includes automated validation tests covering input routing, media playback recovery, and patient transfer integrity:
+
+- `CNA.Reliability.Input.MenuCursorRouting`: Verifies cursor dot initialization, dedicated virtual user routing, and opposite-hand lockout.
+- `CNA.Reliability.Input.OpenXRStartupRegistration`: Confirms Enhanced Input registration priority and trigger binding validation.
+- `CNA.Reliability.Media.RecoveryPolicy`: Tests media startup timeouts, stall recovery, and retry behavior.
+- `CNA.Patient.Interaction`: Validates phase-based grab locking and transfer state transitions.
+
+Tests can be executed via the Unreal Engine Session Frontend or via commandlet:
+```powershell
+UnrealEditor-Cmd.exe "<ProjectPath>/CNABedToWheelchair.uproject" -ExecCmds="Automation RunTests CNA.; Quit" -stdout -nullrhi
+```
