@@ -32,6 +32,7 @@ bool UPatientCarryComponent::BeginCarry(UGrabComponent* Grabber, ABeltActor* Bel
 	}
 
 	USkeletalMesh* MeshAsset = Mesh->GetSkeletalMeshAsset();
+	if (!BeltActor->IsGrabInteractionEnabled()) return false;
 	if (!MeshAsset || CarryAnimation->GetSkeleton() != MeshAsset->GetSkeleton())
 	{
 		UE_LOG(LogTemp, Error, TEXT("PatientCarry: Animation '%s' does not use patient skeleton '%s'."),

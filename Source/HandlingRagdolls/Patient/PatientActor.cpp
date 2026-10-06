@@ -12,6 +12,8 @@
 #include "Components/SkeletalMeshComponent.h"
 #include "PhysicsEngine/PhysicalAnimationComponent.h"
 #include "PhysicsEngine/BodyInstance.h"
+#include "../Transfer/BeltActor.h"
+#include "UObject/UObjectIterator.h"
 #include "Animation/AnimSequence.h"
 #include "Engine/Engine.h"
 
@@ -112,6 +114,7 @@ void APatientActor::BeginPlay()
 	{
 		FName Pelvis = ResolveBoneName(EPatientBoneRole::Pelvis);
 		PatientCinematic->Initialize(PatientMesh, Pelvis);
+		PatientCinematic->OnCinematicComplete.AddDynamic(this, &APatientActor::OnBedCinematicFinished);
 	}
 
 	// Bind the bed seated blend completion to kick off the cinematic fade.
@@ -175,10 +178,40 @@ void APatientActor::Tick(float DeltaTime)
 // IGrabbable Implementation
 // ============================================================
 
+bool APatientActor::IsGrabInteractionEnabled() const
+{
+	return InteractionPhase == EPatientInteractionPhase::BedPreparation && !bSpineDamaged;
+}
+
+bool APatientActor::CanGrabBelt() const
+{
+	return InteractionPhase == EPatientInteractionPhase::BedPreparation
+		|| InteractionPhase == EPatientInteractionPhase::BeltTransfer;
+}
+
+void APatientActor::SetInteractionPhase(EPatientInteractionPhase Phase)
+{
+	if (InteractionPhase == Phase) return;
+	if (InteractionPhase == EPatientInteractionPhase::Complete && Phase != EPatientInteractionPhase::BedPreparation) return;
+	InteractionPhase = Phase;
+	TArray<UGrabComponent*> Cancel;
+	for (TObjectIterator<UGrabComponent> It; It; ++It)
+	{
+		UGrabComponent* Grabber = *It;
+		if (!IsValid(Grabber) || Grabber->GetWorld() != GetWorld()) continue;
+		AActor* Target = Grabber->GetGrabbedActor();
+		ABeltActor* Belt = Cast<ABeltActor>(Target);
+		if ((Target == this && !IsGrabInteractionEnabled())
+			|| (Belt && Belt->GetInteractionPatient() == this && !CanGrabBelt())) Cancel.Add(Grabber);
+	}
+	for (UGrabComponent* Grabber : Cancel) Grabber->CancelInteraction();
+	UE_LOG(LogTemp, Log, TEXT("PatientInteraction: phase=%d body=%d belt=%d"), int32(Phase), IsGrabInteractionEnabled(), CanGrabBelt());
+}
+
 bool APatientActor::CanBeGrabbed(FName BoneName, FVector GrabLocation) const
 {
 	// Cannot grab an injured patient (simulation already failed)
-	if (bSpineDamaged)
+	if (!IsGrabInteractionEnabled())
 	{
 		return false;
 	}
@@ -201,7 +234,7 @@ bool APatientActor::CanBeGrabbed(FName BoneName, FVector GrabLocation) const
 
 void APatientActor::OnGrabbed(UGrabComponent* Grabber, FName BoneName, FVector GrabLocation)
 {
-	if (!Grabber) return;
+	if (!Grabber || !CanBeGrabbed(BoneName, GrabLocation)) return;
 
 	ActiveGrabbers.Add(Grabber, BoneName);
 
@@ -238,7 +271,7 @@ void APatientActor::OnReleased(UGrabComponent* Grabber)
 {
 	if (!Grabber) return;
 
-	ActiveGrabbers.Remove(Grabber);
+	if (ActiveGrabbers.Remove(Grabber) == 0) return;
 
 	// Re-evaluate neck support
 	bNeckIsSupported = false;
@@ -255,6 +288,7 @@ void APatientActor::OnReleased(UGrabComponent* Grabber)
 	if (ActiveGrabbers.Num() == 0 && PatientPhysics)
 	{
 				PatientPhysics->RestoreGrabMass();
+		if (Grabber->IsInteractionCancellation()) return;
 		
 		// If the patient is seated on the bed, physics is completely disabled and 
 		// animation owns the pose. Do not re-apply the Seated state config, because 
@@ -295,6 +329,7 @@ UPrimitiveComponent* APatientActor::GetGrabbableComponent() const
 
 TArray<FName> APatientActor::GetGrabbableBoneNames() const
 {
+	if (!IsGrabInteractionEnabled()) return {};
 	if (AttachedBelt ||
 		CurrentState == EPatientState::LyingDown ||
 		CurrentState == EPatientState::BeingSupported ||
@@ -312,6 +347,7 @@ TArray<FName> APatientActor::GetGrabbableBoneNames() const
 
 bool APatientActor::CanAttachBelt() const
 {
+	if (!CanGrabBelt()) return false;
 	// Belt can only be attached if:
 	// 1. Patient is being supported (neck is held), or has already been seated
 	//    and stabilized. Once seated, requiring a hand to remain on the neck
@@ -497,25 +533,21 @@ float APatientActor::GetCurrentAngleDeviation(FName BoneName) const
 
 void APatientActor::SetPatientState(EPatientState NewState)
 {
+	if (NewState == EPatientState::LyingDown && InteractionPhase != EPatientInteractionPhase::BedPreparation)
+	{
+		bIsPureAnimationDriven = false;
+		SetInteractionPhase(EPatientInteractionPhase::BedPreparation);
+	}
+	else if (InteractionPhase == EPatientInteractionPhase::Complete && NewState != EPatientState::Seated) return;
+	if ((NewState == EPatientState::BeingLifted || NewState == EPatientState::BeingTransferred)
+		&& InteractionPhase == EPatientInteractionPhase::BedPreparation)
+		SetInteractionPhase(EPatientInteractionPhase::BeltTransfer);
 	// If the patient enters the seated state on the bed, we lock out physics permanently for the rest of the workflow.
 		if (NewState == EPatientState::Seated)
 	{
 		bIsPureAnimationDriven = true;
 
-		// Force any holding VR hands to release! 
-		// If a Physics Handle continues to pull the patient after they become kinematic (animation-driven),
-		// the Physics Handle's constraint solver will explode and catapult the player/patient!
-				// Safely collect grabbers first to avoid modifying the map while iterating
-		TArray<UGrabComponent*> GrabbersToRelease;
-		for (auto& Pair : ActiveGrabbers)
-		{
-			if (Pair.Key) GrabbersToRelease.Add(Pair.Key);
-		}
-		for (UGrabComponent* Grabber : GrabbersToRelease)
-		{
-			Grabber->ReleaseRagdoll();
-		}
-		ActiveGrabbers.Empty();
+		// Validated seating entry cancels interactions before changing the pose.
 	}
 
 	if (NewState != EPatientState::Seated && SeatedTransition && SeatedTransition->IsSeatedLocked())
@@ -678,7 +710,9 @@ bool APatientActor::BeginSeatedTransitionAt(const FTransform& SeatTarget, AWheel
 		PatientCarry->PrepareForSeating();
 	}
 	SeatedTransition->BeginSeatedBlendToTarget(SeatTarget, Wheelchair);
-	return SeatedTransition->IsSettling() || SeatedTransition->IsSeatedLocked();
+	const bool bStarted = SeatedTransition->IsSettling() || SeatedTransition->IsSeatedLocked();
+	if (!bStarted) SetInteractionPhase(EPatientInteractionPhase::BeltTransfer);
+	return bStarted;
 }
 
 bool APatientActor::IsKinematicCarryActive() const
@@ -780,6 +814,8 @@ bool APatientActor::IsNeckSupportBone(FName BoneName) const
 
 void APatientActor::OnSettleCancelled()
 {
+	if (InteractionPhase == EPatientInteractionPhase::Complete) return;
+	SetInteractionPhase(EPatientInteractionPhase::BeltTransfer);
 	// A wheelchair handoff begins while the belt is attached. Restore that
 	// transfer state so its held/pivot configuration is reapplied for a retry.
 	CurrentState = AttachedBelt
@@ -806,6 +842,7 @@ void APatientActor::OnSettleCancelled()
 
 void APatientActor::OnSeatedTransitionComplete()
 {
+	if (SeatedTransition && SeatedTransition->HasSeatTarget()) SetInteractionPhase(EPatientInteractionPhase::Complete);
 	if (CurrentState == EPatientState::Seated) return;
 
 	// Applying DA_State_Seated here would re-enable pinned physics bodies and
@@ -819,10 +856,17 @@ void APatientActor::OnSeatedTransitionComplete()
 void APatientActor::OnBedSeatedBlendFinished()
 {
 	UE_LOG(LogTemp, Log, TEXT("PatientActor: Bed seated blend finished — starting cinematic sequence."));
-	if (PatientCinematic)
+	if (PatientCinematic && PatientCinematic->bEnabled)
 	{
 		PatientCinematic->StartCinematicSequence();
 	}
+	else OnBedCinematicFinished();
+}
+
+void APatientActor::OnBedCinematicFinished()
+{
+	if (InteractionPhase == EPatientInteractionPhase::BedSeating)
+		SetInteractionPhase(EPatientInteractionPhase::BeltTransfer);
 }
 
 // ============================================================

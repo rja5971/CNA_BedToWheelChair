@@ -5,6 +5,7 @@ public class HandlingRagdollsEditor : ModuleRules
 {
 	public HandlingRagdollsEditor(ReadOnlyTargetRules Target) : base(Target)
 	{
+		bEnableExceptions = true;
 		PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
 
 		PublicDependencyModuleNames.AddRange(new string[]
@@ -25,7 +26,14 @@ public class HandlingRagdollsEditor : ModuleRules
 		PrivateDependencyModuleNames.AddRange(new string[]
 		{
 			"InputCore",
-			"AssetRegistry"
+			"AssetRegistry",
+			"BlueprintGraph",
+			"InputBlueprintNodes",
+			"Kismet",
+			"KismetCompiler",
+			"UMG",
+			"EnhancedInput",
+			"MediaAssets"
 		});
 
 		// Include runtime module headers

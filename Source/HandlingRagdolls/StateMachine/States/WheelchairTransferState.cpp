@@ -65,6 +65,7 @@ void UWheelchairTransferState::TickState(float DeltaTime)
 		else if (!Transition || !Transition->IsSettling())
 		{
 			bSeatingTransitionStarted = false;
+			if (PatientActor) PatientActor->SetInteractionPhase(EPatientInteractionPhase::BeltTransfer);
 			if (Wheelchair)
 			{
 				Wheelchair->OnTransferFailed(PatientActor);
@@ -169,6 +170,15 @@ void UWheelchairTransferState::TickState(float DeltaTime)
 			bSeatingTransitionStarted = true;
 			UE_LOG(LogTemp, Log, TEXT("WheelchairTransfer: Starting seated animation on %s at %.1f cm."),
 				*Wheelchair->GetName(), Distance);
+		}
+		else if (ConcretePatient)
+		{
+			// A rejected native animation handoff is a retry, not task completion.
+			Wheelchair->OnTransferFailed(PatientActor);
+			ConcretePatient->SetInteractionPhase(EPatientInteractionPhase::BeltTransfer);
+			bSeatingTransitionStarted = false;
+			ActiveWheelchair.Reset();
+			UE_LOG(LogTemp, Warning, TEXT("WheelchairTransfer: Seating rejected; belt interaction remains available for retry."));
 		}
 		else
 		{

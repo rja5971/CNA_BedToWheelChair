@@ -12,10 +12,14 @@
 		{
 			"Name": "HandlingRagdollsEditor",
 			"Type": "Editor",
-			"LoadingPhase": "PostEngineInit"
+			"LoadingPhase": "Default"
 		}
 	],
 	"Plugins": [
+		{
+			"Name": "XRBase",
+			"Enabled": true
+		},
 		{
 			"Name": "OpenXR",
 			"Enabled": true,

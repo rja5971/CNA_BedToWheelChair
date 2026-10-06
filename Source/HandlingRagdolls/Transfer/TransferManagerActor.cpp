@@ -70,6 +70,8 @@ void ATransferManagerActor::BeginPlay()
 		}
 	}
 
+	// Bind the loose belt so cinematic locks also apply before attachment.
+	if (BeltRef) BeltRef->SetInteractionPatient(PatientRef);
 	// Wire the state machine references from this actor's level-set references.
 	if (StateMachine)
 	{

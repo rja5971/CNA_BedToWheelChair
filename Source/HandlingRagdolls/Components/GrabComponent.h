@@ -44,6 +44,9 @@ public:
 	/** Release current grab */
 	UFUNCTION(BlueprintCallable, Category = "Ragdoll Grab")
 	void ReleaseRagdoll();
+	/** Release ownership without producing a user transfer-release gesture. */
+	void CancelInteraction();
+	bool IsInteractionCancellation() const { return bInteractionCancellation; }
 
 	/** Check if currently holding something */
 	UFUNCTION(BlueprintCallable, Category = "Ragdoll Grab")
@@ -138,6 +141,7 @@ protected:
 	float MaxHandPenetrationDepth = 5.0f;
 
 private:
+	bool bInteractionCancellation = false;
 	/** Internal physics handle for smooth grabbing */
 	UPROPERTY()
 	TObjectPtr<UPhysicsHandleComponent> PhysicsHandle;

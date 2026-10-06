@@ -37,6 +37,12 @@ void UGrabComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorC
 
 	if (IsGrabbing())
 	{
+		IIGrabbable* Grabbable = Cast<IIGrabbable>(GrabbedActor);
+		if (!IsValid(GrabbedActor) || !Grabbable || !Grabbable->IsGrabInteractionEnabled())
+		{
+			CancelInteraction();
+			return;
+		}
 		UpdateGrabTarget();
 	}
 }
@@ -65,7 +71,7 @@ bool UGrabComponent::TryGrabRagdoll()
 	}
 
 	// Check if this specific bone/location can be grabbed
-	if (!Grabbable->CanBeGrabbed(FoundBone, FoundLocation))
+	if (!Grabbable->IsGrabInteractionEnabled() || !Grabbable->CanBeGrabbed(FoundBone, FoundLocation))
 	{
 		UE_LOG(LogTemp, Log, TEXT("[Grab] CanBeGrabbed=FALSE for %s bone %s"), *GetNameSafe(FoundActor), *FoundBone.ToString());
 		return false;
@@ -125,6 +131,12 @@ bool UGrabComponent::TryGrabRagdoll()
 	return true;
 }
 
+void UGrabComponent::CancelInteraction()
+{
+	TGuardValue<bool> Cancellation(bInteractionCancellation, true);
+	ReleaseRagdoll();
+}
+
 void UGrabComponent::ReleaseRagdoll()
 {
 	if (!IsGrabbing()) return;
@@ -135,21 +147,18 @@ void UGrabComponent::ReleaseRagdoll()
 		PhysicsHandle->ReleaseComponent();
 	}
 
-	// Notify the actor being released
-	IIGrabbable* Grabbable = Cast<IIGrabbable>(GrabbedActor);
+	AActor* PreviousActor = GrabbedActor;
+	GrabbedActor = nullptr;
+	GrabbedBoneName = NAME_None;
+	GrabLocation = FVector::ZeroVector;
+	// Clear ownership before actor callbacks or delegates can re-enter release.
+	IIGrabbable* Grabbable = IsValid(PreviousActor) ? Cast<IIGrabbable>(PreviousActor) : nullptr;
 	if (Grabbable)
 	{
 		Grabbable->OnReleased(this);
 	}
 
-	// Broadcast event
-	OnGrabEnded.Broadcast(GrabbedActor);
-
-	// Clear state
-	AActor* PreviousActor = GrabbedActor;
-	GrabbedActor = nullptr;
-	GrabbedBoneName = NAME_None;
-	GrabLocation = FVector::ZeroVector;
+	OnGrabEnded.Broadcast(PreviousActor);
 }
 
 bool UGrabComponent::FindGrabTarget(AActor*& OutActor, FName& OutBoneName, FVector& OutLocation) const
@@ -225,7 +234,7 @@ bool UGrabComponent::FindGrabTarget(AActor*& OutActor, FName& OutBoneName, FVect
 		if (!Grabbable) continue;
 
 		// Check if this specific bone/location can actually be grabbed
-		if (!Grabbable->CanBeGrabbed(Hit.BoneName, Hit.ImpactPoint))
+		if (!Grabbable->IsGrabInteractionEnabled() || !Grabbable->CanBeGrabbed(Hit.BoneName, Hit.ImpactPoint))
 		{
 			UE_LOG(LogTemp, Log, TEXT("[GrabTrace] %s bone '%s' — CanBeGrabbed=FALSE, skipping"),
 				*GetNameSafe(HitActor), *Hit.BoneName.ToString());

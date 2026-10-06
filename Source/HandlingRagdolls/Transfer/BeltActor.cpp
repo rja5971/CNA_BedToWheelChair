@@ -167,9 +167,22 @@ void ABeltActor::Tick(float DeltaTime)
 // IGrabbable Implementation — delegates to BeltComponent
 // ============================================================
 
+APatientActor* ABeltActor::GetInteractionPatient() const
+{
+	if (BeltComp)
+		if (APatientActor* Patient = Cast<APatientActor>(BeltComp->GetAttachedPatient())) return Patient;
+	return InteractionPatient;
+}
+
+bool ABeltActor::IsGrabInteractionEnabled() const
+{
+	const APatientActor* Patient = GetInteractionPatient();
+	return !Patient || Patient->CanGrabBelt();
+}
+
 bool ABeltActor::CanBeGrabbed(FName BoneName, FVector GrabLocation) const
 {
-	if (!BeltComp) return false;
+	if (!BeltComp || !IsGrabInteractionEnabled()) return false;
 
 	// If belt is not attached to patient, it can always be picked up (to carry it)
 	if (!BeltComp->IsAttached())
@@ -192,7 +205,7 @@ bool ABeltActor::CanBeGrabbed(FName BoneName, FVector GrabLocation) const
 
 void ABeltActor::OnGrabbed(UGrabComponent* Grabber, FName BoneName, FVector GrabLocation)
 {
-	if (!BeltComp || !Grabber) return;
+	if (!BeltComp || !Grabber || !IsGrabInteractionEnabled()) return;
 
 	if (BeltComp->IsAttached())
 	{
@@ -254,6 +267,7 @@ UPrimitiveComponent* ABeltActor::GetGrabbableComponent() const
 
 TArray<FName> ABeltActor::GetGrabbableBoneNames() const
 {
+	if (!IsGrabInteractionEnabled()) return {};
 	if (BeltComp)
 	{
 		return BeltComp->GetHandleNames();
