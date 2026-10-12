@@ -122,15 +122,45 @@ The project includes automated validation tests covering input routing, media pl
 - `CNA.Reliability.Input.OpenXRStartupRegistration`: Confirms Enhanced Input registration priority and trigger binding validation.
 - `CNA.Reliability.Media.RecoveryPolicy`: Tests media startup timeouts, stall recovery, and retry behavior.
 - `CNA.Patient.Interaction`: Validates phase-based grab locking and transfer state transitions.
-- `CNA.PatientInteraction.MobileVRFade`: Rendered test of fade opacity, black hold, cancellation, completion, and teardown. Run with a rendering RHI (not `-nullrhi`).
+- `CNA.PatientInteraction.MobileVRFade`: Backend-selection test of fade opacity, black hold, cancellation, completion, and teardown. Run with a rendering RHI (not `-nullrhi`).
 
-The bed cinematic uses a face-locked OpenXR stereo layer on mobile VR when
-`r.MobileHDR=False`. Camera-manager fades rely on post-processing and are not
-visible in the mobile LDR renderer. The overlay uses a small runtime RGBA texture,
-keeps the configured fade/hold timings, and is destroyed when the sequence ends or
-is cancelled. Desktop rendering continues to use the camera-manager fade.
+The bed cinematic uses a separate camera-attached sphere with the same
+`M_VRFade` material and geometry as the working house-entry fade. Its dynamic
+material and completion event are independent of the menu. Mobile HDR stays off.
+The sequence reaches full opacity, waits until the next frame, then repositions
+the patient. Cancellation, completion and teardown clear the sphere. Desktop
+non-VR rendering continues to use the camera-manager fade.
+The shared `M_VRFade` material disables depth testing so nearby patient/room
+geometry cannot obscure either camera-sphere fade. Its graph and timing are unchanged.
+
+`UTransferGuidanceComponent` on the transfer manager observes successful grabs,
+patient phase locks, belt attachment/carry, and the transfer state's latched chair.
+It renders cyan ghost hands, a belt target, movement arrows and a frozen seated
+patient aligned by pelvis to `SeatTarget`. The actual commit zone controls the
+green release cue. Guidance has no collision, physics, shadows or navigation
+influence. Decisions refresh on interaction events and at 10 Hz; anchors update
+every frame. Pose offsets, path vectors, label offsets and colors are editable
+in the manager's **TransferGuidance / VisualSettings**.
+
+The existing menu adds **Hints: On/Off** using the existing controller cursor.
+Hints start enabled; the choice persists through map travel for the current app
+session. The menu and seating/cinematic locks hide guidance. Existing interaction,
+scoring and transfer mechanics remain authoritative.
+
+- `CNA.PatientInteraction.TransferGuidance`: sequence, early releases, pooled
+  noninteractive components, configured/nearest/latched chairs, moving seat target,
+  missing/occupied chairs, session preference, menu toggle, completion and failure.
+- `cna.Patient.TestFade`: isolated development-console fade using the real backend
+  without moving the patient or invoking the menu timeline. It can be repeated.
+- `cna.Patient.SmokeInteractionLocks`: real training-map grab/carry/seating regression.
+
+Quest 2 acceptance is required after installing the Android ASTC APK: verify
+readable hints in both eyes; every early-release retry; the menu toggle and level
+travel; no seat cue for an unavailable chair; a fully black patient transition
+without a visible pose jump; and the unchanged house-entry fade. Editor tests
+and packaging do not establish headset success.
 
 Tests can be executed via the Unreal Engine Session Frontend or via commandlet:
 ```powershell
-UnrealEditor-Cmd.exe "<ProjectPath>/CNABedToWheelchair.uproject" -ExecCmds="Automation RunTests CNA.; Quit" -stdout -nullrhi
+UnrealEditor-Cmd.exe "<ProjectPath>/CNABedToWheelchair.uproject" -ExecCmds="Automation RunTests CNA." -TestExit="Automation Test Queue Empty" -stdout -dx12
 ```

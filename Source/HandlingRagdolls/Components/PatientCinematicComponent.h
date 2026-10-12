@@ -8,8 +8,10 @@
 
 class USkeletalMeshComponent;
 class UAnimSequence;
-class UStereoLayerComponent;
-class UTextureRenderTarget2D;
+class UStaticMeshComponent;
+class UStaticMesh;
+class UMaterialInterface;
+class UMaterialInstanceDynamic;
 
 /** Phase tracking for the cinematic fade sequence. */
 UENUM(BlueprintType)
@@ -31,8 +33,8 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnCinematicComplete);
  * Intended to run after the patient's bed seated blend completes. Listens
  * for OnBedSeatedBlendComplete from USeatedTransitionComponent (wired in
  * PatientActor::BeginPlay) and orchestrates the screen fade using
- * APlayerCameraManager::StartCameraFade, with a compositor overlay for mobile
- * VR when Mobile HDR is disabled (camera fades are not rendered in that path).
+ * a camera-attached mesh overlay in VR, matching the working menu fade.
+ * Desktop rendering retains APlayerCameraManager::StartCameraFade.
  */
 UCLASS(ClassGroup = (PatientCare), meta = (BlueprintSpawnableComponent))
 class HANDLINGRAGDOLLS_API UPatientCinematicComponent : public UActorComponent
@@ -110,6 +112,10 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Patient Cinematic|Config")
 	bool bFadeAudio = false;
 
+	/** Exercise the actual mesh backend in desktop development tests. */
+	UPROPERTY(EditAnywhere, Category = "Patient Cinematic|Debug")
+	bool bUseMeshFadeWithoutHMD = false;
+
 	// ============================================================
 	// Events
 	// ============================================================
@@ -132,6 +138,7 @@ private:
 	void DestroyVRFadeOverlay();
 	void BeginFadeOut();
 	void OnFadeOutComplete();
+	void RepositionAfterBlackFrame();
 	void BeginFadeIn();
 	void OnFadeInComplete();
 	void RepositionPatient();
@@ -141,9 +148,16 @@ private:
 	float FadeStartTime = 0.f;
 
 	UPROPERTY(Transient)
-	TObjectPtr<UStereoLayerComponent> VRFadeLayer;
+	TObjectPtr<UStaticMeshComponent> VRFadeSphere;
 	UPROPERTY(Transient)
-	TObjectPtr<UTextureRenderTarget2D> VRFadeTexture;
+	TObjectPtr<UMaterialInstanceDynamic> VRFadeMaterial;
+	UPROPERTY()
+	TObjectPtr<UMaterialInterface> FadeSphereMaterial;
+	UPROPERTY()
+	TObjectPtr<UStaticMesh> FadeSphereMesh;
+	bool bRepositionPending = false;
+	bool bOwnsCameraFade = false;
+	uint64 BlackFrameNumber = 0;
 
 	FTimerHandle PreFadeTimerHandle;
 	FTimerHandle FadeOutTimerHandle;

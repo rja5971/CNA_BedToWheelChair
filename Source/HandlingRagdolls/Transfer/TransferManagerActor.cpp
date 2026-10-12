@@ -5,6 +5,7 @@
 #include "../Components/ScoringComponent.h"
 #include "../Components/SpineMonitorComponent.h"
 #include "../Components/BeltComponent.h"
+#include "../Components/TransferGuidanceComponent.h"
 #include "../Components/VRPatientCareBridgeComponent.h"
 #include "../Patient/PatientActor.h"
 #include "../Interfaces/IPatient.h"
@@ -22,6 +23,7 @@ ATransferManagerActor::ATransferManagerActor()
 	StateMachine = CreateDefaultSubobject<UTransferStateMachine>(TEXT("TransferStateMachine"));
 	Scoring = CreateDefaultSubobject<UScoringComponent>(TEXT("Scoring"));
 	SpineMonitor = CreateDefaultSubobject<USpineMonitorComponent>(TEXT("SpineMonitor"));
+	TransferGuidance = CreateDefaultSubobject<UTransferGuidanceComponent>(TEXT("TransferGuidance"));
 }
 
 void ATransferManagerActor::BeginPlay()
@@ -90,6 +92,7 @@ void ATransferManagerActor::BeginPlay()
 	}
 
 	// Wire the spine monitor to watch the patient
+	if (TransferGuidance) TransferGuidance->Initialize(StateMachine);
 	if (SpineMonitor && PatientRef)
 	{
 		SpineMonitor->SetMonitorTarget(PatientRef);
@@ -124,6 +127,7 @@ void ATransferManagerActor::ResetTransfer()
 		Scoring->ResetScore();
 	}
 	UE_LOG(LogTemp, Log, TEXT("TransferManager: Transfer reset."));
+	if (TransferGuidance) TransferGuidance->Initialize(StateMachine);
 }
 
 FText ATransferManagerActor::GetCurrentInstructions() const

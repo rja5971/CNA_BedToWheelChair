@@ -8,67 +8,86 @@
 #include "Kismet/GameplayStatics.h"
 #include "Camera/PlayerCameraManager.h"
 #include "GameFramework/PlayerController.h"
-#include "Components/StereoLayerComponent.h"
+#include "Components/StaticMeshComponent.h"
+#include "Camera/CameraComponent.h"
+#include "Materials/MaterialInstanceDynamic.h"
+#include "UObject/ConstructorHelpers.h"
+#include "GameFramework/Pawn.h"
+#include "EngineUtils.h"
 #include "Engine/Engine.h"
-#include "Engine/TextureRenderTarget2D.h"
 #include "HAL/IConsoleManager.h"
-#include "Kismet/KismetRenderingLibrary.h"
+#include "../Patient/PatientActor.h"
+#include "AudioDevice.h"
 
 UPatientCinematicComponent::UPatientCinematicComponent()
 {
 	PrimaryComponentTick.bCanEverTick = true;
 	PrimaryComponentTick.bStartWithTickEnabled = false;
+	PrimaryComponentTick.TickGroup = TG_PostUpdateWork;
+	static ConstructorHelpers::FObjectFinder<UMaterialInterface> FadeMaterial(TEXT("/Game/Project/Custom_Materails/M_VRFade"));
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> Sphere(TEXT("/Engine/BasicShapes/Sphere"));
+	FadeSphereMaterial = FadeMaterial.Object;
+	FadeSphereMesh = Sphere.Object;
 }
 
 bool UPatientCinematicComponent::CreateVRFadeOverlay()
 {
-	if (VRFadeLayer) return true;
-	if (!GetOwner() || !GetWorld()) return false;
+	if (VRFadeSphere) return true;
+	APawn* Pawn = UGameplayStatics::GetPlayerPawn(this, 0);
+	UCameraComponent* Camera = Pawn ? Pawn->FindComponentByClass<UCameraComponent>() : nullptr;
+	if (!Camera || !FadeSphereMaterial || !FadeSphereMesh) return false;
 
-	// A runtime texture avoids a material/texture asset dependency in the cook.
-	VRFadeTexture = UKismetRenderingLibrary::CreateRenderTarget2D(this, 16, 16, RTF_RGBA8, FLinearColor::Transparent);
-	if (!VRFadeTexture) return false;
-	VRFadeLayer = NewObject<UStereoLayerComponent>(GetOwner(), NAME_None, RF_Transient);
-	// UStereoLayerComponent defaults to FaceLocked and a quad shape. Its relative
-	// transform is in view space, independent of the patient's movement/rotation.
-	VRFadeLayer->SetRelativeLocation(FVector(100.f, 0.f, 0.f));
-	VRFadeLayer->SetQuadSize(FVector2D(10000.f, 10000.f));
-	VRFadeLayer->SetPriority(MAX_int32);
-	VRFadeLayer->bLiveTexture = true;
-	VRFadeLayer->bNoAlphaChannel = false;
-	VRFadeLayer->bSupportsDepth = false;
-	VRFadeLayer->SetTexture(VRFadeTexture);
-	VRFadeLayer->RegisterComponent();
-	VRFadeLayer->AddTickPrerequisiteComponent(this);
+	// Use the same camera-space geometry/material as the proven menu FadeSphere,
+	// but never share its MID, timeline or level-transition delegates.
+	VRFadeSphere = NewObject<UStaticMeshComponent>(Pawn, NAME_None, RF_Transient);
+	Pawn->AddInstanceComponent(VRFadeSphere);
+	VRFadeSphere->SetStaticMesh(FadeSphereMesh);
+	VRFadeSphere->SetupAttachment(Camera);
+	VRFadeSphere->SetRelativeTransform(FTransform::Identity);
+	VRFadeSphere->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	VRFadeSphere->SetGenerateOverlapEvents(false);
+	VRFadeSphere->SetCanEverAffectNavigation(false);
+	VRFadeSphere->SetCastShadow(false);
+	VRFadeSphere->TranslucencySortPriority = 10000;
+	VRFadeMaterial = UMaterialInstanceDynamic::Create(FadeSphereMaterial, this);
+	VRFadeMaterial->SetScalarParameterValue(TEXT("Opacity"), 0.f);
+	VRFadeSphere->SetMaterial(0, VRFadeMaterial);
+	VRFadeSphere->RegisterComponent();
 	SetComponentTickEnabled(true);
-	UE_LOG(LogTemp, Log, TEXT("PatientCinematic: Using face-locked stereo layer for mobile LDR fade."));
+	UE_LOG(LogTemp, Display, TEXT("PatientCinematic: MeshFade camera=%s material=%s stereo=%d featureLevel=%d"),
+		*Camera->GetPathName(), *FadeSphereMaterial->GetPathName(), GEngine && GEngine->IsStereoscopic3D(), (int32)GetWorld()->GetFeatureLevel());
 	return true;
 }
 
 void UPatientCinematicComponent::UpdateVRFadeOverlay(float Opacity)
 {
-	if (!VRFadeLayer || !VRFadeTexture) return;
-	FLinearColor Color = FadeColor;
-	Color.A = FMath::Clamp(Opacity, 0.f, 1.f);
-	UKismetRenderingLibrary::ClearRenderTarget2D(this, VRFadeTexture, Color);
+	if (VRFadeMaterial) VRFadeMaterial->SetScalarParameterValue(TEXT("Opacity"), FMath::Clamp(Opacity, 0.f, 1.f));
+	if (VRFadeSphere && bFadeAudio && GetWorld())
+		if (FAudioDeviceHandle Audio = GetWorld()->GetAudioDevice()) Audio->SetTransientPrimaryVolume(1.f - FMath::Clamp(Opacity, 0.f, 1.f));
 }
 
 void UPatientCinematicComponent::DestroyVRFadeOverlay()
 {
 	SetComponentTickEnabled(false);
-	if (VRFadeLayer)
+	bRepositionPending = false;
+	UpdateVRFadeOverlay(0.f);
+	if (VRFadeSphere)
 	{
-		// DestroyComponent unregisters and removes the native compositor layer.
-		VRFadeLayer->DestroyComponent();
-		VRFadeLayer = nullptr;
+		VRFadeSphere->DestroyComponent();
+		VRFadeSphere = nullptr;
 	}
-	VRFadeTexture = nullptr;
+	VRFadeMaterial = nullptr;
 }
 
 void UPatientCinematicComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
-	if (!VRFadeLayer || !GetWorld()) return;
+	if (!GetWorld()) return;
+	if (bRepositionPending && GFrameCounter > BlackFrameNumber)
+	{
+		RepositionAfterBlackFrame();
+		return;
+	}
 	const float Elapsed = GetWorld()->GetTimeSeconds() - FadeStartTime;
 	if (CurrentPhase == ECinematicPhase::FadingOut)
 	{
@@ -133,7 +152,12 @@ void UPatientCinematicComponent::StartCinematicSequence()
 
 void UPatientCinematicComponent::CancelCinematic()
 {
-	if (CurrentPhase == ECinematicPhase::Idle) return;
+	if (CurrentPhase == ECinematicPhase::Idle)
+	{
+		ClearAllTimers();
+		DestroyVRFadeOverlay();
+		return;
+	}
 
 	UE_LOG(LogTemp, Log, TEXT("PatientCinematic: Cancelling cinematic at phase %d."),
 		static_cast<int32>(CurrentPhase));
@@ -142,9 +166,9 @@ void UPatientCinematicComponent::CancelCinematic()
 	DestroyVRFadeOverlay();
 
 	// If the screen is faded, restore it immediately.
-	if (CurrentPhase == ECinematicPhase::FadingOut ||
+	if (bOwnsCameraFade && (CurrentPhase == ECinematicPhase::FadingOut ||
 		CurrentPhase == ECinematicPhase::HoldingBlack ||
-		CurrentPhase == ECinematicPhase::FadingIn)
+		CurrentPhase == ECinematicPhase::FadingIn))
 	{
 		if (APlayerController* PC = UGameplayStatics::GetPlayerController(GetWorld(), 0))
 		{
@@ -155,6 +179,7 @@ void UPatientCinematicComponent::CancelCinematic()
 		}
 	}
 
+	bOwnsCameraFade = false;
 	CurrentPhase = ECinematicPhase::Idle;
 }
 
@@ -168,14 +193,15 @@ void UPatientCinematicComponent::BeginFadeOut()
 	FadeStartTime = GetWorld()->GetTimeSeconds();
 	UE_LOG(LogTemp, Log, TEXT("PatientCinematic: Beginning fade out over %.1fs."), FadeOutDuration);
 
-	const IConsoleVariable* MobileHDR = IConsoleManager::Get().FindConsoleVariable(TEXT("r.MobileHDR"));
-	if (GEngine && GEngine->IsStereoscopic3D()
-		&& GetWorld()->GetFeatureLevel() <= ERHIFeatureLevel::ES3_1
-		&& MobileHDR && MobileHDR->GetInt() == 0)
+	const bool bUseMeshFade = bUseMeshFadeWithoutHMD || PLATFORM_ANDROID || (GEngine && GEngine->IsStereoscopic3D());
+	if (bUseMeshFade)
 	{
 		if (!CreateVRFadeOverlay())
 		{
-			UE_LOG(LogTemp, Error, TEXT("PatientCinematic: Failed to create mobile VR fade overlay."));
+			UE_LOG(LogTemp, Error, TEXT("PatientCinematic: No camera/material for mesh fade; cancelling before reposition."));
+			CancelCinematic();
+			OnCinematicComplete.Broadcast();
+			return;
 		}
 		UpdateVRFadeOverlay(0.f);
 	}
@@ -184,8 +210,11 @@ void UPatientCinematicComponent::BeginFadeOut()
 	{
 		if (APlayerCameraManager* CameraManager = PC->PlayerCameraManager)
 		{
-			// Fade from clear (0) to black (1), hold when finished.
-			CameraManager->StartCameraFade(0.0f, 1.0f, FadeOutDuration, FadeColor, bFadeAudio, true);
+			if (!VRFadeSphere)
+			{
+				bOwnsCameraFade = true;
+				CameraManager->StartCameraFade(0.0f, 1.0f, FadeOutDuration, FadeColor, bFadeAudio, true);
+			}
 		}
 	}
 
@@ -204,7 +233,19 @@ void UPatientCinematicComponent::OnFadeOutComplete()
 {
 	CurrentPhase = ECinematicPhase::HoldingBlack;
 	UpdateVRFadeOverlay(1.f);
-	UE_LOG(LogTemp, Log, TEXT("PatientCinematic: Screen is black. Repositioning patient."));
+	if (VRFadeSphere)
+	{
+		BlackFrameNumber = GFrameCounter;
+		bRepositionPending = true;
+		return;
+	}
+	RepositionAfterBlackFrame();
+}
+
+void UPatientCinematicComponent::RepositionAfterBlackFrame()
+{
+	bRepositionPending = false;
+	UE_LOG(LogTemp, Display, TEXT("PatientCinematic: Full black frame reached. Repositioning patient."));
 
 	// Reposition and swap animation while the screen is black.
 	RepositionPatient();
@@ -234,7 +275,7 @@ void UPatientCinematicComponent::BeginFadeIn()
 		if (APlayerCameraManager* CameraManager = PC->PlayerCameraManager)
 		{
 			// Fade from black (1) to clear (0), do not hold.
-			CameraManager->StartCameraFade(1.0f, 0.0f, FadeInDuration, FadeColor, bFadeAudio, false);
+			if (!VRFadeSphere) CameraManager->StartCameraFade(1.0f, 0.0f, FadeInDuration, FadeColor, bFadeAudio, false);
 		}
 	}
 
@@ -253,6 +294,7 @@ void UPatientCinematicComponent::OnFadeInComplete()
 {
 	ClearAllTimers();
 	DestroyVRFadeOverlay();
+	bOwnsCameraFade = false;
 	CurrentPhase = ECinematicPhase::Idle;
 	UE_LOG(LogTemp, Log, TEXT("PatientCinematic: Cinematic sequence complete."));
 	OnCinematicComplete.Broadcast();
@@ -332,5 +374,27 @@ void UPatientCinematicComponent::ClearAllTimers()
 		TM.ClearTimer(FadeInTimerHandle);
 	}
 }
+
+#if !UE_BUILD_SHIPPING
+// Uses the same backend selector, timings and frame gate, with no patient mesh
+// and no menu timeline/delegate. Safe to run repeatedly on a development Quest.
+static FAutoConsoleCommandWithWorld GCNATestPatientFade(
+	TEXT("cna.Patient.TestFade"), TEXT("Test the patient fade without moving the patient or loading a level."),
+	FConsoleCommandWithWorldDelegate::CreateLambda([](UWorld* World)
+	{
+		APawn* Pawn = UGameplayStatics::GetPlayerPawn(World, 0);
+		if (!Pawn) return;
+		const FName Name(TEXT("PatientFadeDiagnostic"));
+		UPatientCinematicComponent* Test = FindObject<UPatientCinematicComponent>(Pawn, *Name.ToString());
+		if (!Test)
+		{
+			Test = NewObject<UPatientCinematicComponent>(Pawn, Name, RF_Transient);
+			Pawn->AddInstanceComponent(Test); Test->RegisterComponent();
+		}
+		Test->PreFadeDelay = 0.f;
+		Test->bUseMeshFadeWithoutHMD = true;
+		Test->StartCinematicSequence();
+	}));
+#endif
 
 

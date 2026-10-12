@@ -5,8 +5,11 @@
 #include "Components/GrabComponent.h"
 #include "Components/SeatedTransitionComponent.h"
 #include "Components/PatientCinematicComponent.h"
-#include "Engine/TextureRenderTarget2D.h"
-#include "Kismet/KismetRenderingLibrary.h"
+#include "Camera/CameraComponent.h"
+#include "Materials/MaterialInstanceDynamic.h"
+#include "Components/StaticMeshComponent.h"
+#include "GameFramework/PlayerController.h"
+#include "GameFramework/Pawn.h"
 #include "Components/WidgetComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Reliability/CNAReliabilityLibrary.h"
@@ -22,6 +25,21 @@
 #include "EdGraph/EdGraphPin.h"
 #include "Misc/AutomationTest.h"
 #include "UObject/UnrealType.h"
+
+#include "Components/TransferGuidanceComponent.h"
+#include "Transfer/TransferManagerActor.h"
+#include "Transfer/WheelchairActor.h"
+#include "StateMachine/TransferStateMachine.h"
+#include "StateMachine/States/WheelchairTransferState.h"
+#include "Reliability/TransferHintMenuWidget.h"
+#include "Engine/GameInstance.h"
+#include "Engine/LocalPlayer.h"
+#include "Engine/Engine.h"
+#include "Engine/SkeletalMesh.h"
+#include "Blueprint/WidgetTree.h"
+#include "Components/Button.h"
+#include "Components/TextBlock.h"
+#include "Components/TextRenderComponent.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 namespace
@@ -78,52 +96,208 @@ bool FCNAPatientCinematicFadeTest::RunTest(const FString& Parameters)
     Cinematic->BlackScreenHoldDuration = 1.f;
     Cinematic->FadeInDuration = 1.f;
 
-    // Force the compositor backend in a rendered desktop test without requiring
-    // an attached headset. Read back the actual texture submitted to both eyes.
-    if (!TestTrue(TEXT("Runtime fade texture/layer can be created without cooked assets"), Cinematic->CreateVRFadeOverlay())) return false;
-    auto ReadOpacity = [&]()
-    {
-        return UKismetRenderingLibrary::ReadRenderTargetRawPixel(Cinematic, Cinematic->VRFadeTexture, 0, 0).A / 255.f;
-    };
+    APawn* Pawn = Setup.World->SpawnActor<APawn>();
+    UCameraComponent* Camera = NewObject<UCameraComponent>(Pawn);
+    Pawn->SetRootComponent(Camera); Pawn->AddInstanceComponent(Camera); Camera->RegisterComponent();
+    APlayerController* PC = Setup.World->SpawnActor<APlayerController>(); Setup.World->AddController(PC); PC->SetPawn(Pawn);
+    Cinematic->Initialize(Setup.Patient->GetPatientMesh(), NAME_None);
+    Cinematic->PostFadeLocationOffset = FVector(11, 0, 0);
+    Cinematic->PostFadeRelativeRotation = FRotator::ZeroRotator;
+    const FVector Before = Setup.Patient->GetPatientMesh()->GetComponentLocation();
+    Cinematic->bUseMeshFadeWithoutHMD = true;
+    // Exercise the selector through the public sequence entry, not a manually
+    // created overlay that would bypass the Android/HMD backend decision.
     Cinematic->StartCinematicSequence();
-    Cinematic->UpdateVRFadeOverlay(0.f);
-    TestEqual(TEXT("Overlay initially transparent"), ReadOpacity(), 0.f);
+    if (!TestNotNull(TEXT("Sequence selected the mesh backend"), Cinematic->VRFadeSphere.Get())) return false;
+    auto ReadOpacity = [&]() { float Value = -1; Cinematic->VRFadeMaterial->GetScalarParameterValue(TEXT("Opacity"), Value); return Value; };
+    TestEqual(TEXT("Uses the proven menu material"), Cinematic->FadeSphereMaterial->GetPathName(), FString(TEXT("/Game/Project/Custom_Materails/M_VRFade.M_VRFade")));
+    TestEqual(TEXT("Fade attached to active camera"), Cinematic->VRFadeSphere->GetAttachParent(), static_cast<USceneComponent*>(Camera));
+    TestEqual(TEXT("Fade geometry matches menu scale"), Cinematic->VRFadeSphere->GetRelativeScale3D(), FVector::OneVector);
+    TestFalse(TEXT("Does not own the menu camera fade"), Cinematic->bOwnsCameraFade);
+    TestEqual(TEXT("Initially clear"), ReadOpacity(), 0.f);
     Cinematic->FadeStartTime = Setup.World->GetTimeSeconds() - .5f;
     Cinematic->TickComponent(.5f, LEVELTICK_All, nullptr);
-    TestTrue(TEXT("Fade out submits half opacity"), FMath::IsNearlyEqual(ReadOpacity(), .5f, .01f));
+    TestTrue(TEXT("Fade out half opacity"), FMath::IsNearlyEqual(ReadOpacity(), .5f));
     Cinematic->OnFadeOutComplete();
-    TestEqual(TEXT("Reposition begins with fully opaque overlay"), ReadOpacity(), 1.f);
-    Cinematic->TickComponent(.5f, LEVELTICK_All, nullptr);
-    TestEqual(TEXT("Overlay remains opaque during black hold"), ReadOpacity(), 1.f);
+    TestEqual(TEXT("Fully black before any reposition"), ReadOpacity(), 1.f);
+    TestEqual(TEXT("Patient has not moved on black submission frame"), Setup.Patient->GetPatientMesh()->GetComponentLocation(), Before);
+    Cinematic->TickComponent(0.f, LEVELTICK_All, nullptr);
+    TestTrue(TEXT("Reposition waits for a subsequent frame"), Cinematic->bRepositionPending);
+    // Automation runs in one frame; simulate the counter seen after a render.
+    Cinematic->BlackFrameNumber = GFrameCounter - 1;
+    Cinematic->TickComponent(.016f, LEVELTICK_All, nullptr);
+    TestFalse(TEXT("Black-frame gate consumed"), Cinematic->bRepositionPending);
+    TestEqual(TEXT("Patient moved only after gate"), Setup.Patient->GetPatientMesh()->GetComponentLocation(), Before + FVector(11,0,0));
+    TestEqual(TEXT("Black hold remains opaque"), ReadOpacity(), 1.f);
     Cinematic->BeginFadeIn();
     Cinematic->FadeStartTime = Setup.World->GetTimeSeconds() - .5f;
     Cinematic->TickComponent(.5f, LEVELTICK_All, nullptr);
-    TestTrue(TEXT("Fade in submits half opacity"), FMath::IsNearlyEqual(ReadOpacity(), .5f, .01f));
+    TestTrue(TEXT("Fade in half opacity"), FMath::IsNearlyEqual(ReadOpacity(), .5f));
+    UMaterialInstanceDynamic* FirstMID = Cinematic->VRFadeMaterial;
     Cinematic->CancelCinematic();
     TestFalse(TEXT("Cancellation stops sequence"), Cinematic->IsCinematicActive());
-    TestNull(TEXT("Cancellation destroys native layer component"), Cinematic->VRFadeLayer.Get());
-    TestNull(TEXT("Cancellation releases render target"), Cinematic->VRFadeTexture.Get());
+    float Cleared = -1; FirstMID->GetScalarParameterValue(TEXT("Opacity"), Cleared);
+    TestEqual(TEXT("Cancellation clears opacity"), Cleared, 0.f);
+    TestNull(TEXT("Cancellation destroys sphere"), Cinematic->VRFadeSphere.Get());
+    TestNull(TEXT("Cancellation releases MID"), Cinematic->VRFadeMaterial.Get());
     TestFalse(TEXT("No idle tick overhead"), Cinematic->IsComponentTickEnabled());
-
-    // A new sequence must be able to create and retire another overlay.
-    TestTrue(TEXT("Overlay can be recreated for next attempt"), Cinematic->CreateVRFadeOverlay());
+    TestFalse(TEXT("Cancellation removes fade timer"), Setup.World->GetTimerManager().IsTimerActive(Cinematic->FadeOutTimerHandle));
     Cinematic->StartCinematicSequence();
+    TestNotNull(TEXT("Repeat sequence creates its own overlay"), Cinematic->VRFadeSphere.Get());
+    TestTrue(TEXT("Each sequence uses independent MID"), Cinematic->VRFadeMaterial.Get() != FirstMID);
     Cinematic->OnFadeInComplete();
-    TestNull(TEXT("Normal completion destroys overlay"), Cinematic->VRFadeLayer.Get());
-    TestFalse(TEXT("Normal completion stops sequence"), Cinematic->IsCinematicActive());
-    Cinematic->ClearAllTimers();
-
-    TestTrue(TEXT("Overlay can be recreated before teardown"), Cinematic->CreateVRFadeOverlay());
+    TestNull(TEXT("Completion removes overlay"), Cinematic->VRFadeSphere.Get());
+    TestFalse(TEXT("Completion stops sequence"), Cinematic->IsCinematicActive());
+    Cinematic->StartCinematicSequence(); Cinematic->UnregisterComponent();
+    TestNull(TEXT("Teardown removes overlay"), Cinematic->VRFadeSphere.Get());
+    TestFalse(TEXT("Teardown removes timers"), Setup.World->GetTimerManager().IsTimerActive(Cinematic->FadeOutTimerHandle));
+    Cinematic->RegisterComponent();
+    Cinematic->FadeOutDuration = 0.f; Cinematic->BlackScreenHoldDuration = 0.f; Cinematic->FadeInDuration = 0.f;
     Cinematic->StartCinematicSequence();
-    Cinematic->UnregisterComponent();
-    TestNull(TEXT("Component teardown destroys overlay"), Cinematic->VRFadeLayer.Get());
-    TestFalse(TEXT("Component teardown cancels timers"), Setup.World->GetTimerManager().IsTimerActive(Cinematic->FadeOutTimerHandle));
+    TestTrue(TEXT("Zero timing still waits for black frame"), Cinematic->bRepositionPending);
+    Cinematic->BlackFrameNumber = GFrameCounter - 1; Cinematic->TickComponent(.016f, LEVELTICK_All, nullptr);
+    TestFalse(TEXT("Zero timing finishes after frame gate"), Cinematic->IsCinematicActive());
 
-    Cinematic->FadeOutDuration = 0.f;
-    Cinematic->BlackScreenHoldDuration = 0.f;
-    Cinematic->FadeInDuration = 0.f;
-    Cinematic->StartCinematicSequence();
-    TestFalse(TEXT("Zero-duration sequence completes instead of waiting on an inactive timer"), Cinematic->IsCinematicActive());
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCNATransferGuidanceTest, "CNA.PatientInteraction.TransferGuidance", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FCNATransferGuidanceTest::RunTest(const FString& Parameters)
+{
+    UGameInstance* Instance = NewObject<UGameInstance>(GEngine);
+    Instance->InitializeStandalone();
+    UWorld* World = Instance->GetWorld();
+    APatientActor* Patient = World->SpawnActor<APatientActor>();
+    ABeltActor* Belt = World->SpawnActor<ABeltActor>();
+    AWheelchairActor* Chair = World->SpawnActor<AWheelchairActor>(); Chair->LockBrakes(); Chair->SetActorLocation(FVector(400,0,0));
+    UPatientBoneMapping* Mapping = LoadObject<UPatientBoneMapping>(nullptr, TEXT("/Game/PatientSetup/DA_BoneMapping_SKM_Manny_Simple"));
+    FindFProperty<FObjectPropertyBase>(Patient->GetClass(), TEXT("BoneMapping"))->SetObjectPropertyValue_InContainer(Patient, Mapping);
+    Patient->GetPatientMesh()->SetSkeletalMesh(LoadObject<USkeletalMesh>(nullptr, TEXT("/Game/Characters/Mannequins/Meshes/SKM_Manny_Simple")));
+    APlayerController* PC = World->SpawnActor<APlayerController>();
+    ULocalPlayer* LocalPlayer = NewObject<ULocalPlayer>(GEngine);
+    Instance->AddLocalPlayer(LocalPlayer, FPlatformUserId::CreateFromInternalId(0));
+    World->AddController(PC); PC->SetPlayer(LocalPlayer);
+    APawn* Pawn = World->SpawnActor<APawn>();
+    UCameraComponent* Camera = NewObject<UCameraComponent>(Pawn); Pawn->SetRootComponent(Camera); Pawn->AddInstanceComponent(Camera); Camera->RegisterComponent(); PC->SetPawn(Pawn);
+    UGrabComponent* Grab = NewObject<UGrabComponent>(Pawn); Pawn->AddInstanceComponent(Grab); Grab->RegisterComponent(); Grab->SetTraceOrigin(Camera);
+    ATransferManagerActor* Manager = World->SpawnActor<ATransferManagerActor>(); Manager->DispatchBeginPlay();
+    UTransferStateMachine* State = Manager->GetStateMachine();
+    UTransferGuidanceComponent* Hints = Manager->GetTransferGuidance();
+    auto Check = [&](const TCHAR* Description, ETransferHintStep Expected) { Hints->RefreshHints(); TestTrue(Description, Hints->GetHintStep() == Expected); };
+    Check(TEXT("Launch shows accepted patient grab"), ETransferHintStep::GrabPatient);
+    TestNotNull(TEXT("Ghost mesh exists"), Hints->Hand.Get());
+    if (Hints->Hand && Hints->Hand->DoesSocketExist(TEXT("hand_r")))
+    {
+        const FTransform Contact = Hints->VisualSettings.HeadHandPose * FTransform(Hints->GrabTarget().GetRotation(), Hints->GrabTarget().GetLocation());
+        TestTrue(TEXT("Right ghost uses right wrist despite shared skeleton containing both hands"), Hints->Hand->GetSocketLocation(TEXT("hand_r")).Equals(Contact.GetLocation(), .1f));
+    }
+    for (UPrimitiveComponent* Visual : TArray<UPrimitiveComponent*>{Hints->Hand.Get(), Hints->SeatedGhost.Get(), Hints->BeltGhost.Get(), Hints->Target.Get(), Hints->ArrowShaft.Get(), Hints->ArrowHead.Get(), Hints->Label.Get()})
+    {
+        if (!Visual) continue;
+        TestTrue(TEXT("Guidance never participates in traces or physics"), Visual->GetCollisionEnabled() == ECollisionEnabled::NoCollision);
+        TestFalse(TEXT("Guidance never simulates"), Visual->IsSimulatingPhysics());
+        TestFalse(TEXT("Guidance never influences navigation"), Visual->CanEverAffectNavigation());
+        TestFalse(TEXT("Guidance casts no shadows"), Visual->CastShadow);
+    }
+    Patient->OnGrabbed(Grab, TEXT("neck_01"), Patient->GetPatientMesh()->GetSocketLocation(TEXT("neck_01")));
+    Check(TEXT("Successful neck grab advances to lift"), ETransferHintStep::SitUp);
+    TestFalse(TEXT("Contact ghost disappears after grab"), Hints->Hand->IsVisible());
+    Patient->OnReleased(Grab);
+    Check(TEXT("Early release restores neck hint"), ETransferHintStep::GrabPatient);
+    Patient->SetInteractionPhase(EPatientInteractionPhase::BedSeating);
+    Check(TEXT("Bed animation lock wins over task instructions"), ETransferHintStep::None);
+    Patient->SetInteractionPhase(EPatientInteractionPhase::BeltTransfer);
+    Check(TEXT("Bed completion advances to loose belt"), ETransferHintStep::PickUpBelt);
+    FObjectPropertyBase* Held = FindFProperty<FObjectPropertyBase>(Grab->GetClass(), TEXT("GrabbedActor"));
+    Held->SetObjectPropertyValue_InContainer(Grab, Belt); Grab->OnGrabStarted.Broadcast(Belt, NAME_None, Belt->GetActorLocation());
+    TestTrue(TEXT("Actual held-actor event advances to attachment"), Hints->GetHintStep() == ETransferHintStep::AttachBelt);
+    TestEqual(TEXT("Attachment marker follows actual patient target"), Hints->Target->GetComponentLocation(), Patient->GetBeltAttachTransform().GetLocation());
+    Held->SetObjectPropertyValue_InContainer(Grab, nullptr); Grab->OnGrabEnded.Broadcast(Belt);
+    TestTrue(TEXT("Loose belt early release returns to pickup"), Hints->GetHintStep() == ETransferHintStep::PickUpBelt);
+    // A supported patient permits the real belt attachment API.
+    Patient->SetInteractionPhase(EPatientInteractionPhase::BedPreparation);
+    Patient->OnGrabbed(Grab, TEXT("neck_01"), FVector::ZeroVector);
+    Patient->SetInteractionPhase(EPatientInteractionPhase::BeltTransfer);
+    TestTrue(TEXT("Real belt attachment succeeds"), Belt->GetBeltComponent()->AttachToPatient(Patient));
+    Check(TEXT("Attached belt exposes front handle"), ETransferHintStep::GrabBeltHandle);
+    TestEqual(TEXT("Handle visual uses authoritative front location"), Hints->Target->GetComponentLocation(), Belt->GetHandleWorldLocation());
+    Belt->GetBeltComponent()->OnHandleGrabbed(Grab, TEXT("BeltHandle_Front"), Belt->GetHandleWorldLocation());
+    Check(TEXT("Acquired handle starts lift guidance"), ETransferHintStep::LiftAndCarry);
+    TestEqual(TEXT("Before latching, configured ready chair is selected"), Hints->GetSelectedWheelchair(), Chair);
+    AWheelchairActor* Alternative = World->SpawnActor<AWheelchairActor>(); Alternative->LockBrakes(); Alternative->SetActorLocation(FVector(150,0,0));
+    Hints->RefreshHints(); TestEqual(TEXT("Configured chair preferred to nearer chair before latch"), Hints->GetSelectedWheelchair(), Chair);
+    Chair->UnlockBrakes(); Hints->RefreshHints();
+    TestEqual(TEXT("Unavailable configured chair falls back to nearest ready chair"), Hints->GetSelectedWheelchair(), Alternative);
+    Alternative->OnTransferComplete(Patient); Hints->RefreshHints();
+    TestNull(TEXT("Occupied chair is excluded"), Hints->GetSelectedWheelchair());
+    TestTrue(TEXT("No seating or release instruction without ready chair"), Hints->GetHintStep() == ETransferHintStep::LiftAndCarry);
+    Alternative->Destroy(); Alternative = World->SpawnActor<AWheelchairActor>();
+    Alternative->SetActorLocation(FVector(150,0,0)); Alternative->LockBrakes(); Chair->LockBrakes();
+    State->ForceState(ETransferState::WheelchairTransfer);
+    Patient->SetInteractionPhase(EPatientInteractionPhase::BeltTransfer);
+    Check(TEXT("Carry state guides toward seat"), ETransferHintStep::MoveToSeat);
+    // Exercise selection through the real state's approach-zone latch.
+    const FVector Seat = Alternative->GetTargetSeatTransform().GetLocation();
+    Patient->GetPatientMesh()->SetAllBodiesSimulatePhysics(false); Patient->GetPatientMesh()->RefreshBoneTransforms();
+    Patient->GetPatientMesh()->AddWorldOffset(Seat - Patient->GetPelvisLocation(), false, nullptr, ETeleportType::TeleportPhysics);
+    UWheelchairTransferState* ChairState = Cast<UWheelchairTransferState>(FindFProperty<FObjectPropertyBase>(State->GetClass(), TEXT("CurrentState"))->GetObjectPropertyValue_InContainer(State));
+    if (TestNotNull(TEXT("Actual wheelchair transfer state active"), ChairState)) ChairState->TickState(0.f);
+    Check(TEXT("Release shown only inside actual commit zone"), ETransferHintStep::ReleaseToSeat);
+    TestEqual(TEXT("Hint follows actual latched chair, overriding configured chair"), Hints->GetSelectedWheelchair(), Alternative);
+    TestTrue(TEXT("Seated ghost pelvis aligns to SeatTarget"), Hints->SeatedGhost->GetSocketLocation(Patient->GetPelvisBoneName()).Equals(Seat, .1f));
+    Alternative->AddActorWorldOffset(FVector(10,0,0)); Hints->UpdateVisuals();
+    TestTrue(TEXT("Moving chair updates ghost anchor every frame"), Hints->SeatedGhost->GetSocketLocation(Patient->GetPelvisBoneName()).Equals(Alternative->GetTargetSeatTransform().GetLocation(), .1f));
+    Alternative->Destroy(); Hints->UpdateVisuals();
+    TestEqual(TEXT("Removed latched chair immediately falls back to valid chair"), Hints->GetSelectedWheelchair(), Chair);
+    TestTrue(TEXT("Removed chair cannot leave a release instruction"), Hints->GetHintStep() != ETransferHintStep::ReleaseToSeat);
+    Belt->GetBeltComponent()->OnHandleReleased(Grab);
+    Check(TEXT("Early handle release restores grab hint"), ETransferHintStep::GrabBeltHandle);
+    Hints->SetHintsEnabled(false); Check(TEXT("Off hides guidance"), ETransferHintStep::None);
+    UTransferGuidanceComponent* NextLevelGuidance = NewObject<UTransferGuidanceComponent>(Manager); NextLevelGuidance->RegisterComponent(); NextLevelGuidance->Initialize(State);
+    TestFalse(TEXT("New guidance component retains session preference"), NextLevelGuidance->AreHintsEnabled());
+    NextLevelGuidance->DestroyComponent(); Hints->SetHintsEnabled(true);
+    Patient->SetInteractionPhase(EPatientInteractionPhase::WheelchairSeating); Check(TEXT("Chair seating lock hides hints"), ETransferHintStep::None);
+    Patient->SetInteractionPhase(EPatientInteractionPhase::Complete); Check(TEXT("Completion retires guidance"), ETransferHintStep::None);
+    Patient->SetInteractionPhase(EPatientInteractionPhase::BedPreparation);
+    Patient->OnReleased(Grab); Belt->GetBeltComponent()->DetachFromPatient(); State->Reset();
+    Check(TEXT("Repeated attempt returns to patient contact"), ETransferHintStep::GrabPatient);
+    State->OnTransferFailed.Broadcast(FText::FromString(TEXT("Test task failure")));
+    Check(TEXT("Failure event hides hints even before patient injury"), ETransferHintStep::None);
+    Manager->ResetTransfer(); Check(TEXT("Reset clears failure hint lock"), ETransferHintStep::GrabPatient);
+    Patient->SetPatientState(EPatientState::Injured); Check(TEXT("Failure hides guidance"), ETransferHintStep::None);
+    Patient->SetPatientState(EPatientState::LyingDown);
+    // Existing UMG cursor routing targets the normal button added to this menu.
+    UClass* MenuClass = LoadClass<UTransferHintMenuWidget>(nullptr, TEXT("/Game/VRTemplate/Blueprints/WidgetMenu.WidgetMenu_C"));
+    if (TestNotNull(TEXT("Existing menu uses new native parent"), MenuClass))
+    {
+        UTransferHintMenuWidget* Menu = CreateWidget<UTransferHintMenuWidget>(PC, MenuClass);
+        if (TestNotNull(TEXT("Menu can be constructed"), Menu))
+        {
+            Menu->TakeWidget();
+            UButton* Button = Cast<UButton>(Menu->WidgetTree->FindWidget(TEXT("HintsButton")));
+            UTextBlock* Label = Cast<UTextBlock>(Menu->WidgetTree->FindWidget(TEXT("HintsLabel")));
+            if (TestNotNull(TEXT("Hints button added to existing menu"), Button) && TestNotNull(TEXT("Hints button label"), Label))
+            {
+                UClass* VRPawnClass = LoadClass<APawn>(nullptr, TEXT("/Game/VRTemplate/Blueprints/VRPawn.VRPawn_C"));
+                APawn* VRPawn = VRPawnClass ? World->SpawnActor<APawn>(VRPawnClass) : nullptr;
+                FObjectPropertyBase* MenuReference = VRPawn ? FindFProperty<FObjectPropertyBase>(VRPawnClass, TEXT("MenuReference")) : nullptr;
+                if (TestNotNull(TEXT("Real VR pawn menu reference exists"), MenuReference))
+                {
+                    AActor* MenuActor = World->SpawnActor<AActor>(MenuReference->PropertyClass);
+                    PC->SetPawn(VRPawn); MenuReference->SetObjectPropertyValue_InContainer(VRPawn, MenuActor);
+                    Check(TEXT("Open menu hides transfer guidance"), ETransferHintStep::None);
+                    MenuReference->SetObjectPropertyValue_InContainer(VRPawn, nullptr);
+                    Check(TEXT("Closing menu restores current action"), ETransferHintStep::GrabPatient);
+                    PC->SetPawn(Pawn); MenuActor->Destroy(); VRPawn->Destroy();
+                }
+                TestEqual(TEXT("Initial label"), Label->GetText().ToString(), FString(TEXT("Hints: On")));
+                Button->OnClicked.Broadcast(); TestFalse(TEXT("Menu click changes session preference"), Hints->AreHintsEnabled());
+                TestEqual(TEXT("Off label follows preference"), Label->GetText().ToString(), FString(TEXT("Hints: Off")));
+                Button->OnClicked.Broadcast(); TestTrue(TEXT("Second menu click restores hints"), Hints->AreHintsEnabled());
+            }
+        }
+    }
+    Instance->Shutdown(); GEngine->DestroyWorldContext(World); World->DestroyWorld(false);
     return true;
 }
 

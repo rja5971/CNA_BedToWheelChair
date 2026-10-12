@@ -82,6 +82,8 @@ public:
 	IIPatient* GetPatientInterface() const;
 	UObject* GetPatientObject() const;
 	AWheelchairActor* GetWheelchair() const { return Wheelchair; }
+	UFUNCTION(BlueprintPure, Category="Transfer State Machine")
+	AWheelchairActor* GetGuidanceWheelchair() const;
 	UBeltComponent* GetBelt() const;
 	UScoringComponent* GetScoring() const { return Scoring; }
 

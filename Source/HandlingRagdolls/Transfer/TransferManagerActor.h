@@ -13,6 +13,7 @@ class APatientActor;
 class AWheelchairActor;
 class ABeltActor;
 class UVRPatientCareBridgeComponent;
+class UTransferGuidanceComponent;
 
 /**
  * Transfer Manager Actor — the single orchestrator placed in the level.
@@ -55,6 +56,8 @@ public:
 	/** Get the scoring component */
 	UFUNCTION(BlueprintCallable, Category = "Transfer Manager")
 	UScoringComponent* GetScoring() const { return Scoring; }
+	UFUNCTION(BlueprintPure, Category="CNA|Hints")
+	UTransferGuidanceComponent* GetTransferGuidance() const { return TransferGuidance; }
 
 	/** Get the spine monitor component */
 	UFUNCTION(BlueprintCallable, Category = "Transfer Manager")
@@ -73,6 +76,8 @@ protected:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Transfer Manager")
 	TObjectPtr<USpineMonitorComponent> SpineMonitor;
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="CNA|Hints")
+	TObjectPtr<UTransferGuidanceComponent> TransferGuidance;
 
 	// ============================================================
 	// Scene References (wire these in the editor details panel)

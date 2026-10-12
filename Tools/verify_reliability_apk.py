@@ -1,5 +1,5 @@
 """Check Android movies and compare the APK with the verified staged container and native binary.
-Usage: python Tools/verify_reliability_apk.py path/to/app.apk
+Usage: python Tools/verify_reliability_apk.py path/to/app.apk [fresh-container-listing.csv]
 """
 import hashlib
 import io
@@ -45,7 +45,7 @@ def digest(stream):
     return value.hexdigest()
 
 
-def verify(apk):
+def verify(apk, container_listing=None):
     root = Path(__file__).resolve().parents[1]
     expected = list((root / "Content" / "Movies").glob("*.mp4"))
     assert len(expected) == 2, "Expected exactly two required training movies"
@@ -82,16 +82,36 @@ def verify(apk):
                     assert packaged_hash == source_hash, f"APK container differs from staged container: {file.name}"
                     result["containers"].append({"entry": name, "sha256": packaged_hash})
                 assert result["containers"], "Staged containers not found"
-                listing = (root / "Saved/Reliability/AndroidContainer.csv").read_text()
+                listing_path = Path(container_listing) if container_listing else root / "Saved/Reliability/AndroidContainer.csv"
+                listing = listing_path.read_text(encoding="utf-8-sig")
                 result["input_assets"] = ["IA_UIInteract_Left", "IA_UIInteract_Right", "IMC_UIInteract"]
                 for name in result["input_assets"]:
                     assert name + ".uasset" in listing, f"Missing cooked input asset: {name}"
+                if container_listing:
+                    result["guidance_assets"] = [
+                        "M_TransferGhost", "M_VRFade", "SKM_MannyXR_left", "SKM_MannyXR_right",
+                        "A_MannequinsXR_Grasp_Right", "SittingIdle_1__UE", "WidgetMenu"]
+                    for name in result["guidance_assets"]:
+                        assert name + ".uasset" in listing, f"Missing cooked guidance/fade asset: {name}"
         native_files = list((root / "Intermediate/Android/arm64/gradle/app/build/intermediates/stripped_native_libs").glob("**/libUnreal.so"))
         assert len(native_files) == 1, "Expected one final stripped native runtime"
         with archive.open("lib/arm64-v8a/libUnreal.so") as packaged, open(native_files[0], "rb") as source:
             packaged_hash, source_hash = digest(packaged), digest(source)
         assert packaged_hash == source_hash, "APK native runtime differs from final built library"
         result["native_sha256"] = packaged_hash
+        if container_listing:
+            identifiers = ["TransferGuidanceComponent", "TransferHintMenuWidget", "cna.Patient.TestFade"]
+            found = set()
+            with archive.open("lib/arm64-v8a/libUnreal.so") as native:
+                previous = b""
+                for chunk in iter(lambda: native.read(1024 * 1024), b""):
+                    data = previous + chunk
+                    for name in identifiers:
+                        if name.encode() in data or name.encode("utf-16-le") in data:
+                            found.add(name)
+                    previous = data[-256:]
+            assert len(found) == len(identifiers), f"Native guidance/fade symbols missing: {set(identifiers)-found}"
+            result["native_identifiers"] = sorted(found)
     with open(apk, "rb") as file:
         result["sha256"] = digest(file)
     print(json.dumps(result, indent=2))
@@ -99,4 +119,4 @@ def verify(apk):
 
 
 if __name__ == "__main__":
-    verify(Path(sys.argv[1]))
+    verify(Path(sys.argv[1]), sys.argv[2] if len(sys.argv) > 2 else None)

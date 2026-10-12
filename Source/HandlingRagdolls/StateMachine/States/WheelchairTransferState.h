@@ -24,6 +24,7 @@ class HANDLINGRAGDOLLS_API UWheelchairTransferState : public UTransferTaskState
 	GENERATED_BODY()
 
 public:
+	AWheelchairActor* GetGuidanceWheelchair() const { return ActiveWheelchair.IsValid() ? ActiveWheelchair.Get() : CandidateWheelchair.Get(); }
 	virtual void EnterState(UTransferStateMachine* StateMachine) override;
 	virtual void TickState(float DeltaTime) override;
 	virtual void ExitState() override;

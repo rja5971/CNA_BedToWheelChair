@@ -2,6 +2,12 @@
 #include "../Components/GrabComponent.h"
 #include "../Components/BeltComponent.h"
 #include "../Components/PatientCinematicComponent.h"
+#include "../Components/TransferGuidanceComponent.h"
+#include "UnrealClient.h"
+#include "Misc/Paths.h"
+#include "Camera/CameraComponent.h"
+#include "Kismet/GameplayStatics.h"
+#include "GameFramework/Pawn.h"
 #include "../Components/PatientCarryComponent.h"
 #include "../Components/SeatedTransitionComponent.h"
 #include "../Transfer/BeltActor.h"
@@ -36,6 +42,7 @@ struct FPatientInteractionSmoke : TSharedFromThis<FPatientInteractionSmoke>
     bool bPassed = true;
     float Deadline = 0;
     int32 BlockedAttempts = 0;
+    bool bBlackCaptured = false;
 
     void Check(bool bCondition, const TCHAR* Message)
     {
@@ -87,6 +94,26 @@ struct FPatientInteractionSmoke : TSharedFromThis<FPatientInteractionSmoke>
                     && Panel->GetCollisionEnabled() == ECollisionEnabled::NoCollision
                     && !Panel->GetUserWidgetObject()->GetIsEnabled(), TEXT("Room screen retains widget but cannot render or receive input"));
             }
+        Patient->GetPatientCinematicComponent()->bUseMeshFadeWithoutHMD = true;
+        Manager->GetTransferGuidance()->RefreshHints();
+        Check(Manager->GetTransferGuidance()->GetHintStep() == ETransferHintStep::GrabPatient, TEXT("Live training patient exposes ghost contact"));
+        if (APawn* Pawn = UGameplayStatics::GetPlayerPawn(World, 0))
+            if (UCameraComponent* Camera = Pawn->FindComponentByClass<UCameraComponent>())
+            {
+                const FVector Target = Head();
+                const FVector Aisle = (Chair->GetTargetSeatTransform().GetLocation() - Target).GetSafeNormal2D();
+                const FVector View = Target + Aisle * 140.f + FVector(0,0,65);
+                Camera->SetWorldLocationAndRotation(View, (Target - View).Rotation());
+            }
+        TSharedRef<FPatientInteractionSmoke> Self = AsShared(); FTimerHandle Wait, Capture;
+        World->GetTimerManager().SetTimer(Capture, []()
+        {
+            FScreenshotRequest::RequestScreenshot(FPaths::ProjectSavedDir() / TEXT("Guidance/GrabHint.png"), false, false);
+        }, 1.f, false);
+        World->GetTimerManager().SetTimer(Wait, [Self]() { Self->AcquirePatient(); }, 1.25f, false);
+    }
+    void AcquirePatient()
+    {
         for (int32 Index = 0; Index < 2; ++Index)
         {
             AActor* HandActor = World->SpawnActor<AActor>();
@@ -101,7 +128,11 @@ struct FPatientInteractionSmoke : TSharedFromThis<FPatientInteractionSmoke>
         Check(Hands[0]->IsGrabbing() && Patient->IsNeckSupported(), TEXT("Releasing one hand retains other head support"));
         Move(1, Belt->GetActorLocation());
         Check(Grab(1, Belt), TEXT("Loose belt acquired before seating"));
+        Manager->GetTransferGuidance()->RefreshHints();
+        Check(Manager->GetTransferGuidance()->GetHintStep() == ETransferHintStep::SitUp, TEXT("Real head grips advance ghost to movement arrow"));
         Patient->SetPatientState(EPatientState::Seated);
+        Manager->GetTransferGuidance()->RefreshHints();
+        Check(Manager->GetTransferGuidance()->GetHintStep() == ETransferHintStep::None, TEXT("Animation ownership hides real-map guidance"));
         Check(Patient->GetInteractionPhase() == EPatientInteractionPhase::BedSeating && HandlesClear(), TEXT("Upright seating cancels body and loose belt before fade"));
         Check(!Belt->GetBeltComponent()->HasPendingFinalHandleRelease(), TEXT("Forced release does not request wheelchair seating"));
         UPatientCinematicComponent* Cinematic = Patient->GetPatientCinematicComponent();
@@ -121,6 +152,11 @@ struct FPatientInteractionSmoke : TSharedFromThis<FPatientInteractionSmoke>
             World->GetTimerManager().ClearTimer(Poll);
             AfterFade(); return;
         }
+        if (!bBlackCaptured && Patient->GetPatientCinematicComponent()->GetCurrentPhase() == ECinematicPhase::HoldingBlack)
+        {
+            bBlackCaptured = true;
+            FScreenshotRequest::RequestScreenshot(FPaths::ProjectSavedDir() / TEXT("Guidance/FadeBlack.png"), false, false);
+        }
         Move(0, Head()); Move(1, Belt->GetActorLocation());
         bPassed &= !Hands[0]->TryGrabRagdoll() && !Hands[1]->TryGrabRagdoll() && HandlesClear();
         ++BlockedAttempts;
@@ -132,6 +168,9 @@ struct FPatientInteractionSmoke : TSharedFromThis<FPatientInteractionSmoke>
     }
     void AfterFade()
     {
+        Manager->GetTransferGuidance()->RefreshHints();
+        Check(Manager->GetTransferGuidance()->GetHintStep() == ETransferHintStep::PickUpBelt, TEXT("Real fade completion enables loose-belt guidance"));
+        Check(bBlackCaptured, TEXT("Real mesh backend reaches rendered black hold"));
         Check(BlockedAttempts > 0 && HandlesClear(), TEXT("Repeated held-grip attempts stayed blocked across fade"));
         Check(!Patient->GetPatientCinematicComponent()->IsCinematicActive(), TEXT("Fade and rotation complete normally"));
         Move(0, Head()); Check(!Hands[0]->TryGrabRagdoll(), TEXT("Rotated patient rejects head grabs"));

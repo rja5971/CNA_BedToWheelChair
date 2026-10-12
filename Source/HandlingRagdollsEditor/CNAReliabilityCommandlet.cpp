@@ -17,6 +17,7 @@
 #include "Misc/Paths.h"
 #include "HAL/FileManager.h"
 #include "Reliability/CNAReliabilityLibrary.h"
+#include "Reliability/TransferHintMenuWidget.h"
 #include "Reliability/VRWidgetInputComponent.h"
 #include "Reliability/TrainingMediaControllerComponent.h"
 #include "K2Node_CustomEvent.h"
@@ -473,6 +474,20 @@ int32 UCNAReliabilityCommandlet::Main(const FString& Params)
     const bool bApply = FParse::Param(*Params, TEXT("Apply"));
     try
     {
+        if (FParse::Param(*Params, TEXT("SetupGuidance")))
+        {
+            UBlueprint* MenuWidget = Blueprint(TEXT("/Game/VRTemplate/Blueprints/WidgetMenu"));
+            const FString SourceFile = FPackageName::LongPackageNameToFilename(TEXT("/Game/VRTemplate/Blueprints/WidgetMenu"), FPackageName::GetAssetPackageExtension());
+            const FString Backup = FPaths::ProjectSavedDir() / TEXT("Guidance/BeforeGuidance-WidgetMenu.uasset");
+            IFileManager::Get().MakeDirectory(*FPaths::GetPath(Backup), true);
+            if (!IFileManager::Get().FileExists(*Backup)) Require(IFileManager::Get().Copy(*Backup, *SourceFile) == COPY_OK, TEXT("Menu backup failed"));
+            if (MenuWidget->ParentClass != UTransferHintMenuWidget::StaticClass())
+            {
+                MenuWidget->ParentClass = UTransferHintMenuWidget::StaticClass();
+                CompileAndSave(MenuWidget);
+            }
+            return 0;
+        }
         if (bApply)
         {
             // Preserve exact pre-migration asset bytes; the current map is deliberately not rewritten.

@@ -174,6 +174,7 @@ public:
 	/** Get world location of the patient's pelvis bone (resolved via bone mapping) */
 	UFUNCTION(BlueprintCallable, Category = "Patient")
 	virtual FVector GetPelvisLocation() const override;
+	FName GetPelvisBoneName() const { return ResolveBoneName(EPatientBoneRole::Pelvis); }
 
 	/** Get physics linear velocity of the patient's pelvis bone */
 	UFUNCTION(BlueprintCallable, Category = "Patient")

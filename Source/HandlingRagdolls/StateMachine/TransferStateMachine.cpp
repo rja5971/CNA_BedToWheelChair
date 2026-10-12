@@ -18,6 +18,12 @@ UTransferStateMachine::UTransferStateMachine()
 	PrimaryComponentTick.bCanEverTick = true;
 }
 
+AWheelchairActor* UTransferStateMachine::GetGuidanceWheelchair() const
+{
+	const UWheelchairTransferState* ChairState = Cast<UWheelchairTransferState>(CurrentState);
+	return ChairState ? ChairState->GetGuidanceWheelchair() : nullptr;
+}
+
 APatientActor* UTransferStateMachine::GetPatient() const
 {
 	return PatientActor;
