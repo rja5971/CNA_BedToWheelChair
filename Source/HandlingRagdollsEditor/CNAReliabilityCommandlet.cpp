@@ -410,6 +410,80 @@ void DisablePatientConversation()
     UE_LOG(LogTemp, Display, TEXT("CNA_PATIENT_UI: conversation disabled; actor/widget references retained"));
 }
 
+void EnableTrainingUI()
+{
+    const FString BackupDir = FPaths::ProjectSavedDir() / TEXT("UITesting/BeforeEnable");
+    for (const TCHAR* Path : { TEXT("/Game/Project/Blueprints/Actors/BP_PatientChat"), TEXT("/Game/Project/Maps/CNA_Map_01") })
+    {
+        const FString Ext = FString(Path).EndsWith(TEXT("CNA_Map_01")) ? FPackageName::GetMapPackageExtension() : FPackageName::GetAssetPackageExtension();
+        const FString Source = FPackageName::LongPackageNameToFilename(Path, Ext);
+        const FString Backup = BackupDir / (FString(Path).RightChop(6) + Ext);
+        IFileManager::Get().MakeDirectory(*FPaths::GetPath(Backup), true);
+        if (!IFileManager::Get().FileExists(*Backup)) Require(IFileManager::Get().Copy(*Backup, *Source) == COPY_OK, TEXT("UI backup failed"));
+    }
+    UBlueprint* Chat = Blueprint(TEXT("/Game/Project/Blueprints/Actors/BP_PatientChat"));
+    const FName PreviewFlag(TEXT("bShowConversationForUITesting"));
+    if (!FindFProperty<FBoolProperty>(Chat->GeneratedClass, PreviewFlag))
+    {
+        FEdGraphPinType Type; Type.PinCategory = UEdGraphSchema_K2::PC_Boolean;
+        Require(FBlueprintEditorUtils::AddMemberVariable(Chat, PreviewFlag, Type, TEXT("false")), TEXT("Could not add UI testing flag"));
+        for (FBPVariableDescription& Variable : Chat->NewVariables)
+            if (Variable.VarName == PreviewFlag) { Variable.PropertyFlags = CPF_Edit | CPF_BlueprintVisible; Variable.Category = FText::FromString(TEXT("UI Testing")); }
+        FKismetEditorUtilities::CompileBlueprint(Chat);
+        Require(Chat->Status != BS_Error, TEXT("Could not compile UI testing flag"));
+    }
+    UEdGraph* Graph = EventGraph(Chat);
+    bool bHasPreview = false;
+    UK2Node_CallFunction* StartupPolicy = nullptr;
+    for (UEdGraphNode* Node : Graph->Nodes)
+    {
+        bHasPreview |= Node->NodeComment == TEXT("ShowConversationForUITesting");
+        if (UK2Node_CallFunction* Call = Cast<UK2Node_CallFunction>(Node))
+            if (Call->FunctionReference.GetMemberName() == TEXT("ApplyPatientConversationPolicy"))
+                for (UEdGraphPin* Link : Call->GetExecPin()->LinkedTo)
+                    if (UK2Node_VariableSet* Set = Cast<UK2Node_VariableSet>(Link->GetOwningNode()))
+                        if (Set->VariableReference.GetMemberName() == TEXT("OwningActor")) StartupPolicy = Call;
+    }
+    Require(StartupPolicy != nullptr, TEXT("Conversation widget initialization policy missing"));
+    if (!bHasPreview)
+    {
+        Require(StartupPolicy->GetThenPin()->LinkedTo.IsEmpty(), TEXT("Conversation startup unexpectedly has downstream logic"));
+        UK2Node_VariableGet* Flag = NewObject<UK2Node_VariableGet>(Graph);
+        Flag->VariableReference.SetSelfMember(PreviewFlag);
+        Graph->AddNode(Flag, false, false); Flag->CreateNewGuid(); Flag->PostPlacedNewNode(); Flag->AllocateDefaultPins();
+        Flag->NodePosX = StartupPolicy->NodePosX + 220; Flag->NodePosY = StartupPolicy->NodePosY + 160;
+        UK2Node_IfThenElse* Gate = NewObject<UK2Node_IfThenElse>(Graph);
+        Graph->AddNode(Gate, false, false); Gate->CreateNewGuid(); Gate->PostPlacedNewNode(); Gate->AllocateDefaultPins();
+        Gate->NodeComment = TEXT("ShowConversationForUITesting"); Gate->NodePosX = StartupPolicy->NodePosX + 240; Gate->NodePosY = StartupPolicy->NodePosY;
+        UK2Node_CallFunction* Show = NewObject<UK2Node_CallFunction>(Graph);
+        Show->FunctionReference.SetSelfMember(TEXT("EnableChatPanel"));
+        Graph->AddNode(Show, false, false); Show->CreateNewGuid(); Show->PostPlacedNewNode(); Show->AllocateDefaultPins();
+        Show->NodePosX = Gate->NodePosX + 240; Show->NodePosY = Gate->NodePosY;
+        Connect(StartupPolicy->GetThenPin(), Gate->GetExecPin()); Connect(Flag->FindPin(PreviewFlag), Gate->GetConditionPin()); Connect(Gate->GetThenPin(), Show->GetExecPin());
+    }
+    CompileAndSave(Chat);
+    UWorld* World = UEditorLoadingAndSavingUtils::LoadMap(TEXT("/Game/Project/Maps/CNA_Map_01"));
+    Require(World != nullptr, TEXT("Could not load UI testing map"));
+    int32 Count = 0;
+    for (AActor* Actor : World->PersistentLevel->Actors)
+    {
+        if (!Actor || Actor->GetClass() != Chat->GeneratedClass) continue;
+        for (FName Name : { FName(TEXT("bEnablePatientConversation")), PreviewFlag })
+        {
+            FBoolProperty* Flag = FindFProperty<FBoolProperty>(Actor->GetClass(), Name);
+            Require(Flag != nullptr, TEXT("Conversation flag missing")); Flag->SetPropertyValue_InContainer(Actor, true);
+        }
+        UCNAReliabilityLibrary::ApplyPatientConversationPolicy(Actor);
+        UWidgetComponent* Panel = Cast<UWidgetComponent>(UCNAReliabilityLibrary::ObjectProperty(Actor, TEXT("ChatPanel")));
+        Require(Panel != nullptr, TEXT("Conversation panel missing"));
+        Panel->SetVisibility(true); Panel->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
+        ++Count;
+    }
+    Require(Count == 1, TEXT("Expected one patient conversation actor"));
+    Require(UEditorLoadingAndSavingUtils::SaveMap(World, TEXT("/Game/Project/Maps/CNA_Map_01")), TEXT("Could not save enabled UI"));
+    UE_LOG(LogTemp, Display, TEXT("CNA_UI_TESTING: conversation enabled and shown after widget initialization; existing stage-driven widgets retained"));
+}
+
 void MigrateMedia()
 {
     UBlueprint* Display = Blueprint(TEXT("/Game/Project/Blueprints/Actors/BP_MediaDisplay"));
@@ -474,6 +548,7 @@ int32 UCNAReliabilityCommandlet::Main(const FString& Params)
     const bool bApply = FParse::Param(*Params, TEXT("Apply"));
     try
     {
+        if (FParse::Param(*Params, TEXT("EnableTrainingUI"))) { EnableTrainingUI(); return 0; }
         if (FParse::Param(*Params, TEXT("SetupGuidance")))
         {
             UBlueprint* MenuWidget = Blueprint(TEXT("/Game/VRTemplate/Blueprints/WidgetMenu"));

@@ -15,6 +15,33 @@
 
 DEFINE_LOG_CATEGORY_STATIC(LogCNARecovery, Log, All);
 
+bool UCNAReliabilityLibrary::SetPreviewQuizQuestion(UObject* QuizWidget, int32 QuestionIndex)
+{
+    if (!IsValid(QuizWidget) || QuizWidget->GetClass()->GetName() != TEXT("WBP_QuizPanel_C") || QuestionIndex < 0 || QuestionIndex > 1) return false;
+    FIntProperty* Index = FindFProperty<FIntProperty>(QuizWidget->GetClass(), TEXT("CurrentQuestionIndex"));
+    UFunction* Load = QuizWidget->FindFunction(TEXT("LoadNextQuestion"));
+    if (!Index || !Load || Load->ParmsSize != 0) return false;
+    Index->SetPropertyValue_InContainer(QuizWidget, QuestionIndex);
+    QuizWidget->ProcessEvent(Load, nullptr);
+    return true;
+}
+
+UWidgetComponent* UCNAReliabilityLibrary::CreateBeltUIPreview(const UObject* WorldContextObject)
+{
+    UWorld* World = GEngine ? GEngine->GetWorldFromContextObject(WorldContextObject, EGetWorldErrorMode::ReturnNull) : nullptr;
+    if (!World || !World->IsGameWorld()) return nullptr;
+    UClass* WidgetClass = LoadClass<UUserWidget>(nullptr, TEXT("/Game/Project/Blueprints/UI/WBP_BeltUI.WBP_BeltUI_C"));
+    if (!WidgetClass) return nullptr;
+    FActorSpawnParameters Parameters; Parameters.ObjectFlags |= RF_Transient;
+    AActor* Actor = World->SpawnActor<AActor>(Parameters);
+    if (!Actor) return nullptr;
+    UWidgetComponent* Panel = NewObject<UWidgetComponent>(Actor, TEXT("BeltUIPreview"));
+    Actor->SetRootComponent(Panel); Actor->AddInstanceComponent(Panel);
+    Panel->SetWidgetClass(WidgetClass); Panel->SetDrawSize(FVector2D(1200, 500));
+    Panel->RegisterComponent(); Panel->InitWidget();
+    return Panel;
+}
+
 bool UCNAReliabilityLibrary::IsPatientConversationEnabled(AActor* ChatActor)
 {
     const FBoolProperty* Flag = IsValid(ChatActor)

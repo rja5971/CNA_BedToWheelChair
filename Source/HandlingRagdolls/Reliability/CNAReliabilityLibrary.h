@@ -3,6 +3,8 @@
 #include "Kismet/BlueprintFunctionLibrary.h"
 #include "CNAReliabilityLibrary.generated.h"
 
+class UWidgetComponent;
+
 /** Small Blueprint adapters retaining the existing binary assets' entry points. */
 UCLASS()
 class HANDLINGRAGDOLLS_API UCNAReliabilityLibrary : public UBlueprintFunctionLibrary
@@ -28,6 +30,12 @@ public:
 	static bool IsPatientConversationEnabled(AActor* ChatActor);
 	UFUNCTION(BlueprintCallable, Category="CNA|Patient UI")
 	static void ApplyPatientConversationPolicy(AActor* ChatActor);
+
+	/** Runtime-only inspection helpers. Retain the existing quiz button delegates. */
+	UFUNCTION(BlueprintCallable, Category="CNA|UI Testing")
+	static bool SetPreviewQuizQuestion(UObject* QuizWidget, int32 QuestionIndex);
+	UFUNCTION(BlueprintCallable, Category="CNA|UI Testing", meta=(WorldContext="WorldContextObject"))
+	static UWidgetComponent* CreateBeltUIPreview(const UObject* WorldContextObject);
 
 	static UObject* ObjectProperty(const UObject* Object, FName Name);
 	static void CallNoArgs(UObject* Object, FName Function);
