@@ -57,6 +57,7 @@ public:
 	/** Force transition to a specific state (for debugging/reset) */
 	UFUNCTION(BlueprintCallable, Category = "Transfer State Machine")
 	void ForceState(ETransferState NewState);
+    bool RetryBeltLift();
 
 	/** Reset the state machine to idle */
 	UFUNCTION(BlueprintCallable, Category = "Transfer State Machine")
@@ -149,6 +150,8 @@ private:
 
 	/** Whether the task is running */
 	bool bIsRunning = false;
+    bool bTransitioning = false;
+    TSet<ETransferState> RewardedStates;
 
 	/** Transition to the next state */
 	void TransitionToState(ETransferState NewState);

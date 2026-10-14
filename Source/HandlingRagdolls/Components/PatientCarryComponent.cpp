@@ -1,4 +1,6 @@
 #include "PatientCarryComponent.h"
+#include "../Transfer/TransferManagerActor.h"
+#include "EngineUtils.h"
 
 #include "GrabComponent.h"
 #include "PatientPhysicsComponent.h"
@@ -192,6 +194,14 @@ bool UPatientCarryComponent::GetViewerLocation(FVector& OutLocation) const
 
 void UPatientCarryComponent::RestorePhysicsAfterRelease()
 {
+    for (TActorIterator<ATransferManagerActor> It(GetWorld()); It; ++It)
+    {
+        if (It->bGuidedTraining && It->GetStateMachine() && It->HandleInterruptedLift())
+        {
+            PrepareForSeating();
+            return;
+        }
+    }
 	bReleasePending = false;
 	ActiveBelt = nullptr;
 	ViewerActor = nullptr;

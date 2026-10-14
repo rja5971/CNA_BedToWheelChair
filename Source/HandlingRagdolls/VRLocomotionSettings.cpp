@@ -1,4 +1,5 @@
 #include "VRLocomotionSettings.h"
+#include "Reliability/CNAReliabilityLibrary.h"
 #include "GameFramework/Pawn.h"
 
 // Sets default values
@@ -17,7 +18,7 @@ UVRLocomotionSettings::UVRLocomotionSettings()
 
 void UVRLocomotionSettings::ApplyTurn(APawn* Pawn, float AxisValue, float DeltaTime)
 {
-	if (!Pawn) return;
+	if (!Pawn || !UCNAReliabilityLibrary::IsTrainingMovementAllowed(Pawn)) return;
 
 	// SNAP TURN LOGIC
 	if (bUseSnapTurn)
@@ -48,11 +49,11 @@ void UVRLocomotionSettings::ApplyTurn(APawn* Pawn, float AxisValue, float DeltaT
 
 void UVRLocomotionSettings::ApplySmoothMove(APawn* Pawn, FVector2D AxisValue, FVector ForwardDirection, FVector RightDirection)
 {
-	if (!Pawn || bUseTeleport) return; // Don't apply smooth move if teleport is active
+	if (!Pawn || bUseTeleport || !UCNAReliabilityLibrary::IsTrainingMovementAllowed(Pawn)) return; // Don't apply smooth move if teleport is active
 
 	// Add forward/backward movement
-	Pawn->AddMovementInput(ForwardDirection, AxisValue.Y * MovementSpeedMultiplier);
+	UCNAReliabilityLibrary::AddTrainingMovementInput(Pawn, ForwardDirection, AxisValue.Y * MovementSpeedMultiplier);
 
 	// Add left/right movement
-	Pawn->AddMovementInput(RightDirection, AxisValue.X * MovementSpeedMultiplier);
+	UCNAReliabilityLibrary::AddTrainingMovementInput(Pawn, RightDirection, AxisValue.X * MovementSpeedMultiplier);
 }

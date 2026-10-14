@@ -6,6 +6,7 @@
 #include "GameFramework/Actor.h"
 #include "TransferManagerActor.generated.h"
 
+class APawn;
 class UTransferStateMachine;
 class UScoringComponent;
 class USpineMonitorComponent;
@@ -14,6 +15,14 @@ class AWheelchairActor;
 class ABeltActor;
 class UVRPatientCareBridgeComponent;
 class UTransferGuidanceComponent;
+class UWidgetComponent;
+
+UENUM(BlueprintType)
+enum class EGuidedTrainingStage : uint8
+{
+    EntryQuiz, BathroomTransition, BathroomVideo, BathroomContinue, RoomTransition,
+    Conversation, TransferVideo, PatientQuiz, Transfer, Complete, Error
+};
 
 /**
  * Transfer Manager Actor — the single orchestrator placed in the level.
@@ -35,8 +44,44 @@ public:
 
 protected:
 	virtual void BeginPlay() override;
+    virtual void Tick(float DeltaSeconds) override;
+    virtual void EndPlay(const EEndPlayReason::Type Reason) override;
 
 public:
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="CNA|Training")
+    bool bGuidedTraining = false;
+    UFUNCTION(BlueprintPure, Category="CNA|Training") EGuidedTrainingStage GetTrainingStage() const { return TrainingStage; }
+    bool SubmitQuiz(UObject* Widget, int32 Answer);
+    void DismissWrongAnswer();
+    bool BeginRoomTransition();
+    void FinishRoomTransition();
+    bool BeginConversationResponse();
+    bool BeginTransferLesson();
+    bool CanRequestLesson(AActor* Display) const;
+    void LessonCompleted(AActor* Display);
+    bool IsTrainingMovementAllowed() const;
+    bool IsTrainingLocationAllowed(const FVector& WorldLocation) const;
+    FVector ClampTrainingMovementDelta(const APawn* Pawn, const FVector& Delta) const;
+    /** Horizontal radius around arrival in each training area. Tracking stays free. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="CNA|Training|Movement", meta=(ClampMin="0.1", Units="m"))
+    float TrainingMovementRadiusMeters = 5.f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="CNA|Training|Movement", meta=(ClampMin="0", Units="cm/s"))
+    float TrainingSmoothMoveSpeed = 150.f;
+    /** World-space offset from the placed patient actor, in centimetres. Updates live in PIE. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="CNA|Training|Popups", meta=(Units="cm", DisplayName="Transfer Instruction Offset"))
+    FVector StatusPanelOffset = FVector(0.f, 0.f, 115.f);
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="CNA|Training|Popups", meta=(Units="cm"))
+    FVector WrongAnswerPopupOffset = FVector::ZeroVector;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="CNA|Training|Popups", meta=(Units="cm"))
+    FVector ContinuePopupOffset = FVector::ZeroVector;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="CNA|Training|Popups", meta=(Units="cm"))
+    FVector VideoStatusPopupOffset = FVector::ZeroVector;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="CNA|Training|Popups", meta=(ClampMin="0.01", DisplayName="Transfer Instruction Scale"))
+    float StatusPanelScale = .06f;
+    bool HandleInterruptedLift();
+    void ScheduleLiftRetry();
+    void SetTrainingStage(EGuidedTrainingStage Stage);
+
 	/** Start the transfer task */
 	UFUNCTION(BlueprintCallable, Category = "Transfer Manager")
 	void StartTransfer();
@@ -104,6 +149,30 @@ protected:
 	bool bAutoConfigureVRHands = true;
 
 private:
+    friend class FCNAGuidedTrainingTest;
+    void InitializeTrainingUI();
+    void UpdateTrainingUI();
+    void UpdateStatus();
+    void ApplyPopupOffset(UWidgetComponent* Panel, const FVector& Offset);
+    TMap<TWeakObjectPtr<UWidgetComponent>, FVector> PopupBaseLocations;
+    AActor* FindLesson(int32 ID) const;
+    UFUNCTION() void TransferCompleted();
+    UFUNCTION() void TransferFailed(FText Reason);
+    EGuidedTrainingStage TrainingStage = EGuidedTrainingStage::EntryQuiz;
+    bool bTrainingUIReady = false;
+    bool bWrongAnswerOpen = false;
+    bool bConversationResponded = false;
+    bool bRetryMessage = false;
+    bool bStatusAttempted = false;
+    bool bWasMovementLocked = false;
+    void CaptureMovementOrigin() const;
+    mutable bool bMovementOriginValid = false;
+    mutable FVector MovementOrigin = FVector::ZeroVector;
+    FTimerHandle TrainingTransitionTimer;
+    UPROPERTY(Transient) TObjectPtr<AActor> QuizActor;
+    UPROPERTY(Transient) TObjectPtr<AActor> ChatActor;
+    UPROPERTY(Transient) TObjectPtr<UWidgetComponent> TrainingStatus;
+    FText TrainingError;
 	UPROPERTY(Transient)
 	TObjectPtr<UVRPatientCareBridgeComponent> VRPatientCareBridge;
 };

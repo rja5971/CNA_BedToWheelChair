@@ -1,6 +1,19 @@
 #include "CNAReliabilityCommandlet.h"
+#include "Transfer/TransferManagerActor.h"
+#include "Engine/DataTable.h"
 #include <stdexcept>
 #include "Engine/Blueprint.h"
+#include "WidgetBlueprint.h"
+#include "Blueprint/WidgetTree.h"
+#include "Components/Button.h"
+#include "Components/TextBlock.h"
+#include "Components/Border.h"
+#include "Components/BorderSlot.h"
+#include "Components/CanvasPanel.h"
+#include "Components/CanvasPanelSlot.h"
+#include "Components/SizeBox.h"
+#include "Components/SizeBoxSlot.h"
+#include "Components/VerticalBoxSlot.h"
 #include "Engine/World.h"
 #include "Engine/Level.h"
 #include "Engine/SimpleConstructionScript.h"
@@ -28,6 +41,7 @@
 #include "K2Node_VariableGet.h"
 #include "K2Node_VariableSet.h"
 #include "K2Node_FunctionEntry.h"
+#include "K2Node_FunctionResult.h"
 #include "FileHelpers.h"
 #include "Patient/PatientActor.h"
 #include "Transfer/BeltActor.h"
@@ -539,6 +553,313 @@ void MigrateMedia()
     UMediaPlayer* Player = LoadObject<UMediaPlayer>(nullptr, TEXT("/Game/Project/Media/MP_Display"));
     Require(Player != nullptr, TEXT("Missing shared media player")); Player->PlayOnOpen = false; SaveAsset(Player);
 }
+
+void GateTrainingExec(UBlueprint* BP, UEdGraphPin* Source, FName Function)
+{
+    Require(Source && Source->Direction == EGPD_Output, TEXT("Missing training exec source"));
+    if (Source->LinkedTo.Num() && Source->LinkedTo[0]->GetOwningNode()->NodeComment == TEXT("CNA_GuidedGate")) return;
+    UEdGraph* Graph = Source->GetOwningNode()->GetGraph();
+    const TArray<UEdGraphPin*> Previous = Source->LinkedTo;
+    Source->BreakAllPinLinks();
+    UK2Node_CallFunction* Call = LibraryCall(Graph, Function, Source->GetOwningNode()->NodePosX + 180, Source->GetOwningNode()->NodePosY + 80);
+    Call->NodeComment = TEXT("CNA_GuidedGate");
+    ConnectSelf(Graph, Call, TEXT("WorldContextObject"));
+    UK2Node_IfThenElse* Gate = NewObject<UK2Node_IfThenElse>(Graph);
+    Graph->AddNode(Gate, false, false); Gate->CreateNewGuid(); Gate->PostPlacedNewNode(); Gate->AllocateDefaultPins();
+    Gate->NodeComment = TEXT("CNA_GuidedGate");
+    Gate->NodePosX = Call->NodePosX + 220; Gate->NodePosY = Call->NodePosY;
+    if (Call->GetExecPin()) { Connect(Source, Call->GetExecPin()); Connect(Call->GetThenPin(), Gate->GetExecPin()); }
+    else Connect(Source, Gate->GetExecPin());
+    Connect(Call->FindPin(UEdGraphSchema_K2::PN_ReturnValue), Gate->GetConditionPin());
+    for (UEdGraphPin* Target : Previous) Connect(Gate->GetThenPin(), Target);
+}
+
+void ReplaceTrainingEvent(UBlueprint* BP, UEdGraphNode* Event, FName Function, FName Context)
+{
+    UEdGraphPin* Source = Event->FindPin(UEdGraphSchema_K2::PN_Then);
+    Source->BreakAllPinLinks();
+    UK2Node_CallFunction* Call = LibraryCall(Event->GetGraph(), Function, Event->NodePosX + 260, Event->NodePosY);
+    Call->NodeComment = TEXT("CNA_GuidedCallback");
+    ConnectSelf(Event->GetGraph(), Call, Context);
+    Connect(Source, Call->GetExecPin());
+}
+
+void MigrateGuidedTraining()
+{
+    UBlueprint* Quiz = Blueprint(TEXT("/Game/Project/Blueprints/UI/WBP_QuizPanel"));
+    for (UEdGraphNode* Node : TArray<TObjectPtr<UEdGraphNode>>(EventGraph(Quiz)->Nodes))
+    {
+        if (UK2Node_ComponentBoundEvent* Event = Cast<UK2Node_ComponentBoundEvent>(Node))
+        {
+            int32 Answer = Event->ComponentPropertyName == TEXT("Option1Button") ? 1 : Event->ComponentPropertyName == TEXT("Option2Button") ? 2 : Event->ComponentPropertyName == TEXT("Option3Button") ? 3 : 0;
+            if (!Answer) continue;
+            ReplaceTrainingEvent(Quiz, Event, TEXT("SubmitGuidedQuiz"), TEXT("Widget"));
+            UK2Node_CallFunction* Call = Cast<UK2Node_CallFunction>(Event->FindPin(UEdGraphSchema_K2::PN_Then)->LinkedTo[0]->GetOwningNode());
+            Call->FindPin(TEXT("Answer"))->DefaultValue = FString::FromInt(Answer);
+        }
+    }
+    for (UEdGraph* Graph : Quiz->FunctionGraphs)
+        if (Graph->GetFName() == TEXT("MakePlayerTaskAfterQuizCompleted"))
+            for (UEdGraphNode* Node : TArray<TObjectPtr<UEdGraphNode>>(Graph->Nodes))
+                if (UK2Node_FunctionEntry* Entry = Cast<UK2Node_FunctionEntry>(Node)) Entry->FindPin(UEdGraphSchema_K2::PN_Then)->BreakAllPinLinks();
+    // Both training teleports use the already-proven camera-sphere pawn fade.
+    for (UEdGraphNode* Node : TArray<TObjectPtr<UEdGraphNode>>(EventGraph(Quiz)->Nodes))
+    {
+        UK2Node_CallFunction* Old = Cast<UK2Node_CallFunction>(Node);
+        if (!Old || Old->FunctionReference.GetMemberName() != TEXT("StartCameraFade")) continue;
+        const bool bIn = FCString::Atof(*Old->FindPin(TEXT("FromAlpha"))->DefaultValue) > .5f;
+        UK2Node_CallFunction* Call = LibraryCall(Old->GetGraph(), bIn ? TEXT("TrainingFadeIn") : TEXT("TrainingFadeOut"), Old->NodePosX, Old->NodePosY);
+        ConnectSelf(Old->GetGraph(), Call, TEXT("WorldContextObject"));
+        const auto Inputs = Old->GetExecPin()->LinkedTo; const auto Outputs = Old->GetThenPin()->LinkedTo;
+        Old->GetExecPin()->BreakAllPinLinks(); Old->GetThenPin()->BreakAllPinLinks();
+        for (UEdGraphPin* Pin : Inputs) Connect(Pin, Call->GetExecPin());
+        for (UEdGraphPin* Pin : Outputs) Connect(Call->GetThenPin(), Pin);
+        FBlueprintEditorUtils::RemoveNode(Quiz, Old, true);
+    }
+    CompileAndSave(Quiz);
+
+    UBlueprint* Wrong = Blueprint(TEXT("/Game/Project/Blueprints/UI/WBP_WrongAnswerPopup"));
+    for (UEdGraphNode* Node : TArray<TObjectPtr<UEdGraphNode>>(EventGraph(Wrong)->Nodes))
+        if (UK2Node_ComponentBoundEvent* Event = Cast<UK2Node_ComponentBoundEvent>(Node))
+            if (Event->ComponentPropertyName == TEXT("OKButton")) ReplaceTrainingEvent(Wrong, Event, TEXT("DismissGuidedWrongAnswer"), TEXT("WorldContextObject"));
+    CompileAndSave(Wrong);
+
+    UBlueprint* Chat = Blueprint(TEXT("/Game/Project/Blueprints/UI/WBP_PatientChat"));
+    for (UEdGraphNode* Node : TArray<TObjectPtr<UEdGraphNode>>(EventGraph(Chat)->Nodes))
+    {
+        if (UK2Node_ComponentBoundEvent* Event = Cast<UK2Node_ComponentBoundEvent>(Node))
+        {
+            if (Event->ComponentPropertyName == TEXT("NextButton")) ReplaceTrainingEvent(Chat, Event, TEXT("BeginGuidedTransferLesson"), TEXT("WorldContextObject"));
+            if (Event->ComponentPropertyName == TEXT("PatientInteractButton")) GateTrainingExec(Chat, Event->FindPin(UEdGraphSchema_K2::PN_Then), TEXT("BeginGuidedConversationResponse"));
+        }
+        if (UK2Node_CallFunction* Call = Cast<UK2Node_CallFunction>(Node))
+        {
+            if (Call->FunctionReference.GetMemberName() != TEXT("StartPlayback")) continue;
+            const auto Inputs = Call->GetExecPin()->LinkedTo; const auto Outputs = Call->GetThenPin()->LinkedTo;
+            Call->GetExecPin()->BreakAllPinLinks(); Call->GetThenPin()->BreakAllPinLinks();
+            for (UEdGraphPin* Input : Inputs) for (UEdGraphPin* Output : Outputs) Connect(Input, Output);
+        }
+    }
+    CompileAndSave(Chat);
+
+    UBlueprint* ChatActor = Blueprint(TEXT("/Game/Project/Blueprints/Actors/BP_PatientChat"));
+    ReplaceTrainingEvent(ChatActor, CustomEvent(EventGraph(ChatActor), TEXT("EnableChatPanel")), TEXT("RequestGuidedConversationPanel"), TEXT("ChatActor"));
+    CompileAndSave(ChatActor);
+
+    UBlueprint* Handler = Blueprint(TEXT("/Game/Project/Blueprints/Actors/BP_MediaEventHandler"));
+    GateTrainingExec(Handler, CustomEvent(EventGraph(Handler), TEXT("OnContinueClicked_Event"))->FindPin(UEdGraphSchema_K2::PN_Then), TEXT("BeginGuidedRoomTransition"));
+    for (UEdGraphNode* Node : TArray<TObjectPtr<UEdGraphNode>>(EventGraph(Handler)->Nodes))
+    {
+        UK2Node_CallFunction* Old = Cast<UK2Node_CallFunction>(Node);
+        if (!Old || Old->FunctionReference.GetMemberName() != TEXT("StartCameraFade")) continue;
+        const bool bIn = FCString::Atof(*Old->FindPin(TEXT("FromAlpha"))->DefaultValue) > .5f;
+        UK2Node_CallFunction* Call = LibraryCall(Old->GetGraph(), bIn ? TEXT("TrainingFadeIn") : TEXT("TrainingFadeOut"), Old->NodePosX, Old->NodePosY);
+        ConnectSelf(Old->GetGraph(), Call, TEXT("WorldContextObject"));
+        const auto Inputs = Old->GetExecPin()->LinkedTo; const auto Outputs = Old->GetThenPin()->LinkedTo;
+        Old->GetExecPin()->BreakAllPinLinks(); Old->GetThenPin()->BreakAllPinLinks();
+        for (UEdGraphPin* Pin : Inputs) Connect(Pin, Call->GetExecPin());
+        UEdGraphPin* Then = Call->GetThenPin();
+        if (bIn)
+        {
+            UK2Node_CallFunction* Finished = LibraryCall(Old->GetGraph(), TEXT("FinishGuidedRoomTransition"), Old->NodePosX + 250, Old->NodePosY);
+            ConnectSelf(Old->GetGraph(), Finished, TEXT("WorldContextObject"));
+            Connect(Then, Finished->GetExecPin()); Then = Finished->GetThenPin();
+        }
+        for (UEdGraphPin* Pin : Outputs) Connect(Then, Pin);
+        FBlueprintEditorUtils::RemoveNode(Handler, Old, true);
+    }
+    CompileAndSave(Handler);
+
+    UBlueprint* Pawn = Blueprint(TEXT("/Game/VRTemplate/Blueprints/VRPawn"));
+    TArray<UEdGraph*> Graphs; Pawn->GetAllGraphs(Graphs);
+    for (UEdGraph* Graph : Graphs)
+    {
+        for (UEdGraphNode* Node : TArray<TObjectPtr<UEdGraphNode>>(Graph->Nodes))
+        {
+            if (UK2Node_FunctionEntry* Entry = Cast<UK2Node_FunctionEntry>(Node))
+                if (Graph->GetFName() == TEXT("StartTeleportTrace") || Graph->GetFName() == TEXT("TeleportTrace") || Graph->GetFName() == TEXT("TryTeleport") || Graph->GetFName() == TEXT("SnapTurn"))
+                    GateTrainingExec(Pawn, Entry->FindPin(UEdGraphSchema_K2::PN_Then), TEXT("IsTrainingMovementAllowed"));
+            if (UK2Node_CallFunction* Call = Cast<UK2Node_CallFunction>(Node))
+            {
+                const FName Name = Call->FunctionReference.GetMemberName();
+                if (Name != TEXT("AddMovementInput") && Name != TEXT("K2_AddActorWorldOffset") && Name != TEXT("AddControllerYawInput")) continue;
+                if (!Call->GetExecPin()) continue;
+                const auto Inputs = Call->GetExecPin()->LinkedTo;
+                for (UEdGraphPin* Input : Inputs) GateTrainingExec(Pawn, Input, TEXT("IsTrainingMovementAllowed"));
+            }
+        }
+    }
+    CompileAndSave(Pawn);
+
+    // Retire active legacy chair/lift commands without removing their assets.
+    UBlueprint* Step = Blueprint(TEXT("/Game/Project/Blueprints/Actors/BP_StepTrigger"));
+    for (UEdGraphNode* Node : EventGraph(Step)->Nodes)
+        if (UK2Node_CallFunction* Call = Cast<UK2Node_CallFunction>(Node))
+            if (Call->FunctionReference.GetMemberName() == TEXT("TransitionToStandingPose") || Call->FunctionReference.GetMemberName() == TEXT("TransitionToWheelChairSitting")) Call->GetExecPin()->BreakAllPinLinks();
+    CompileAndSave(Step);
+
+    UDataTable* Questions = LoadObject<UDataTable>(nullptr, TEXT("/Game/Project/Blueprints/Data/Datables/DT_Questions"));
+    Require(Questions && Questions->GetRowMap().Contains(TEXT("1")), TEXT("Missing patient-room quiz row"));
+    bool bUpdated = false;
+    for (TFieldIterator<FProperty> It(Questions->GetRowStruct()); It; ++It)
+        if (It->GetName().StartsWith(TEXT("OptionB")))
+            if (FStrProperty* Field = CastField<FStrProperty>(*It))
+            { Field->SetPropertyValue_InContainer(Questions->GetRowMap()[TEXT("1")], TEXT("Help the patient sit with head/neck support")); bUpdated = true; }
+    Require(bUpdated, TEXT("Could not update verified OptionB quiz field"));
+    SaveAsset(Questions);
+
+    UWorld* World = UEditorLoadingAndSavingUtils::LoadMap(TEXT("/Game/Project/Maps/CNA_Map_01"));
+    Require(World != nullptr, TEXT("Could not load guided training map"));
+    int32 Managers = 0, Chats = 0;
+    for (ULevel* Level : World->GetLevels()) for (AActor* Actor : Level->Actors)
+    {
+        if (ATransferManagerActor* Manager = Cast<ATransferManagerActor>(Actor)) { Manager->bGuidedTraining = true; ++Managers; }
+        if (Actor && Actor->GetClass()->GetFName() == TEXT("BP_PatientChat_C"))
+        {
+            for (const TPair<FName, bool>& Flag : { TPair<FName, bool>(TEXT("bEnablePatientConversation"), true), TPair<FName, bool>(TEXT("bShowConversationForUITesting"), false) })
+            {
+                FBoolProperty* Field = FindFProperty<FBoolProperty>(Actor->GetClass(), Flag.Key);
+                Require(Field != nullptr, TEXT("Missing conversation configuration flag"));
+                Field->SetPropertyValue_InContainer(Actor, Flag.Value);
+            }
+            ++Chats;
+        }
+    }
+    Require(Managers == 1 && Chats == 1, TEXT("Expected one native manager and conversation actor"));
+    Require(UEditorLoadingAndSavingUtils::SaveMap(World, TEXT("/Game/Project/Maps/CNA_Map_01")), TEXT("Could not save guided training map"));
+    UE_LOG(LogTemp, Display, TEXT("CNA_GUIDED: migration complete; native guided handoff and delivery flags saved"));
+}
+
+void ApplyQuestFeedback()
+{
+    UBlueprint* Pawn = Blueprint(TEXT("/Game/VRTemplate/Blueprints/VRPawn"));
+    TArray<UEdGraph*> Graphs; Pawn->GetAllGraphs(Graphs);
+    int32 MovementCalls = 0, CommitGates = 0, TraceGates = 0, TrackingFixes = 0;
+    for (UEdGraph* Graph : Graphs)
+    {
+        for (UEdGraphNode* Node : TArray<TObjectPtr<UEdGraphNode>>(Graph->Nodes))
+        {
+            if (UK2Node_CallFunction* Old = Cast<UK2Node_CallFunction>(Node))
+            {
+                const FName Name = Old->FunctionReference.GetMemberName();
+                if (Graph->GetFName() == TEXT("TryTeleport") && Name == TEXT("IsTrainingMovementAllowed"))
+                {
+                    Old->FunctionReference.SetExternalMember(TEXT("IsPendingTrainingTeleportAllowed"), UCNAReliabilityLibrary::StaticClass());
+                    Old->ReconstructNode(); ++CommitGates;
+                }
+                if (Name == TEXT("AddMovementInput"))
+                {
+                    UK2Node_CallFunction* Call = LibraryCall(Graph, TEXT("AddTrainingMovementInput"), Old->NodePosX, Old->NodePosY);
+                    Call->NodeComment = TEXT("CNA_TrainingRadius");
+                    ConnectSelf(Graph, Call, TEXT("Pawn"));
+                    for (FName PinName : { UEdGraphSchema_K2::PN_Execute, UEdGraphSchema_K2::PN_Then, FName(TEXT("WorldDirection")), FName(TEXT("ScaleValue")), FName(TEXT("bForce")) })
+                    {
+                        UEdGraphPin* Source = Old->FindPin(PinName); UEdGraphPin* Target = Call->FindPin(PinName);
+                        Require(Source && Target, TEXT("Movement adapter pin missing"));
+                        Target->DefaultValue = Source->DefaultValue;
+                        const auto Links = Source->LinkedTo; Source->BreakAllPinLinks();
+                        for (UEdGraphPin* Link : Links)
+                            if (Target->Direction == EGPD_Input) Connect(Link, Target); else Connect(Target, Link);
+                    }
+                    FBlueprintEditorUtils::RemoveNode(Pawn, Old, true); ++MovementCalls;
+                }
+                // This offset recentres the collision root around physical HMD tracking. It must always run.
+                if (Name == TEXT("K2_AddActorLocalOffset"))
+                {
+                    const auto Links = Old->GetExecPin()->LinkedTo;
+                    for (UEdGraphPin* Link : Links)
+                    {
+                        UK2Node_IfThenElse* Gate = Cast<UK2Node_IfThenElse>(Link->GetOwningNode());
+                        if (!Gate || Gate->NodeComment != TEXT("CNA_GuidedGate")) continue;
+                        const auto Inputs = Gate->GetExecPin()->LinkedTo;
+                        Gate->GetExecPin()->BreakAllPinLinks(); Old->GetExecPin()->BreakAllPinLinks();
+                        for (UEdGraphPin* Input : Inputs) Connect(Input, Old->GetExecPin());
+                        ++TrackingFixes;
+                    }
+                }
+            }
+            if (Graph->GetFName() == TEXT("IsValidTeleportLocation"))
+            {
+                UK2Node_FunctionResult* Result = Cast<UK2Node_FunctionResult>(Node);
+                if (!Result) continue;
+                UEdGraphPin* Valid = Result->FindPin(UEdGraphSchema_K2::PN_ReturnValue);
+                UEdGraphPin* Location = Result->FindPin(TEXT("ProjectedLocation"));
+                Require(Valid && Location, TEXT("Teleport validity result missing"));
+                if (Valid->LinkedTo.Num() && Valid->LinkedTo[0]->GetOwningNode()->NodeComment == TEXT("CNA_TrainingRadius")) continue;
+                UK2Node_CallFunction* Check = LibraryCall(Graph, TEXT("ValidateTrainingTeleportLocation"), Result->NodePosX - 300, Result->NodePosY + 100);
+                Check->NodeComment = TEXT("CNA_TrainingRadius"); ConnectSelf(Graph, Check, TEXT("WorldContextObject"));
+                Check->FindPin(TEXT("bNavigationValid"))->DefaultValue = Valid->DefaultValue;
+                const auto Previous = Valid->LinkedTo; Valid->BreakAllPinLinks();
+                for (UEdGraphPin* Link : Previous) Connect(Link, Check->FindPin(TEXT("bNavigationValid")));
+                for (UEdGraphPin* Link : Location->LinkedTo) Connect(Link, Check->FindPin(TEXT("ProjectedLocation")));
+                Connect(Check->FindPin(UEdGraphSchema_K2::PN_ReturnValue), Valid); ++TraceGates;
+            }
+        }
+    }
+    CompileAndSave(Pawn);
+    UWidgetBlueprint* Menu = Cast<UWidgetBlueprint>(Blueprint(TEXT("/Game/VRTemplate/Blueprints/WidgetMenu")));
+    UButton* Exit = Menu && Menu->WidgetTree ? Cast<UButton>(Menu->WidgetTree->FindWidget(TEXT("ExitButton"))) : nullptr;
+    UTextBlock* Label = Exit ? Cast<UTextBlock>(Exit->GetContent()) : nullptr;
+    Require(Label != nullptr, TEXT("Existing exit-button label missing"));
+    Label->SetText(FText::FromString(TEXT("Quit"))); CompileAndSave(Menu);
+    UE_LOG(LogTemp, Display, TEXT("CNA_QUEST_FEEDBACK: radius adapters=%d commit=%d trace=%d tracking=%d; Quit label saved"), MovementCalls, CommitGates, TraceGates, TrackingFixes);
+}
+
+void FixPopupLayouts()
+{
+    for (const TCHAR* Name : { TEXT("WBP_MediaText"), TEXT("WBP_WrongAnswerPopup"), TEXT("WBP_CompletionPanel") })
+    {
+        UWidgetBlueprint* BP = Cast<UWidgetBlueprint>(Blueprint(*(FString(TEXT("/Game/Project/Blueprints/UI/")) + Name)));
+        Require(BP && BP->WidgetTree, TEXT("Popup widget tree missing"));
+        const bool bInstruction = FString(Name) == TEXT("WBP_MediaText");
+        const bool bWrong = FString(Name) == TEXT("WBP_WrongAnswerPopup");
+        if (bInstruction || bWrong)
+        {
+            UCanvasPanel* Canvas = Cast<UCanvasPanel>(BP->WidgetTree->RootWidget);
+            Require(Canvas != nullptr, TEXT("Expected popup root canvas"));
+            for (UWidget* Child : Canvas->GetAllChildren())
+                if (UCanvasPanelSlot* Slot = Cast<UCanvasPanelSlot>(Child->Slot))
+                {
+                    Slot->SetAutoSize(false); Slot->SetAnchors(FAnchors(0.f, 0.f, 1.f, 1.f));
+                    Slot->SetOffsets(FMargin(0.f)); Slot->SetAlignment(FVector2D::ZeroVector);
+                }
+        }
+        if (!bInstruction && !bWrong)
+            if (UCanvasPanel* Canvas = Cast<UCanvasPanel>(BP->WidgetTree->RootWidget))
+                for (UWidget* Child : Canvas->GetAllChildren())
+                    if (UCanvasPanelSlot* Slot = Cast<UCanvasPanelSlot>(Child->Slot))
+                    {
+                        const FVector2D Size = Slot->GetSize();
+                        Slot->SetAutoSize(false);
+                        Slot->SetSize(FVector2D(FMath::Max(400.f, Size.X), FMath::Max(360.f, Size.Y)));
+                    }
+        BP->WidgetTree->ForEachWidget([&](UWidget* Widget)
+        {
+            if (UTextBlock* Text = Cast<UTextBlock>(Widget))
+            {
+                Text->SetAutoWrapText(true); Text->SetJustification(ETextJustify::Center);
+                if (UBorderSlot* Slot = Cast<UBorderSlot>(Text->Slot)) Slot->SetHorizontalAlignment(HAlign_Fill);
+                if (UVerticalBoxSlot* Slot = Cast<UVerticalBoxSlot>(Text->Slot)) Slot->SetHorizontalAlignment(HAlign_Fill);
+                if (USizeBoxSlot* Slot = Cast<USizeBoxSlot>(Text->Slot)) Slot->SetHorizontalAlignment(HAlign_Fill);
+            }
+            if (bInstruction)
+                if (UBorder* Border = Cast<UBorder>(Widget))
+                {
+                    Border->SetHorizontalAlignment(HAlign_Fill); Border->SetVerticalAlignment(VAlign_Center);
+                    if (Border->GetFName() == TEXT("Border_102")) Border->SetPadding(FMargin(24.f, 12.f));
+                }
+            if (!bInstruction && !bWrong)
+                if (UBorder* Border = Cast<UBorder>(Widget)) Border->SetHorizontalAlignment(HAlign_Fill);
+            if (bWrong)
+                if (USizeBox* Box = Cast<USizeBox>(Widget))
+                    if (Cast<UTextBlock>(Box->GetContent()))
+                        Box->ClearHeightOverride();
+        });
+        CompileAndSave(BP);
+    }
+    UE_LOG(LogTemp, Display, TEXT("CNA_POPUPS: responsive instruction background and wrapped popup messages saved"));
+}
+
 }
 
 int32 UCNAReliabilityCommandlet::Main(const FString& Params)
@@ -548,6 +869,9 @@ int32 UCNAReliabilityCommandlet::Main(const FString& Params)
     const bool bApply = FParse::Param(*Params, TEXT("Apply"));
     try
     {
+        if (FParse::Param(*Params, TEXT("FixPopupLayouts"))) { FixPopupLayouts(); return 0; }
+        if (FParse::Param(*Params, TEXT("QuestFeedback"))) { ApplyQuestFeedback(); return 0; }
+        if (FParse::Param(*Params, TEXT("GuidedTraining"))) { MigrateGuidedTraining(); return 0; }
         if (FParse::Param(*Params, TEXT("EnableTrainingUI"))) { EnableTrainingUI(); return 0; }
         if (FParse::Param(*Params, TEXT("SetupGuidance")))
         {

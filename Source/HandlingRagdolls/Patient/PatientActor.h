@@ -163,6 +163,10 @@ public:
 	UPatientCinematicComponent* GetPatientCinematicComponent() const { return PatientCinematic; }
 
 	void RestorePhysicsAfterKinematicCarry();
+    void SetTrainingPermissions(bool bPatientAllowed, bool bBeltAllowed);
+    bool CaptureBedCheckpoint();
+    bool RestoreBedCheckpoint();
+    bool HasBedCheckpoint() const { return BedCheckpointAnimation != nullptr; }
 
 	UFUNCTION(BlueprintCallable, Category = "Patient|Seated Transition")
 	bool BeginSeatedTransitionAt(const FTransform& SeatTarget, AWheelchairActor* Wheelchair = nullptr);
@@ -307,6 +311,12 @@ private:
 	EPatientInteractionPhase InteractionPhase = EPatientInteractionPhase::BedPreparation;
 	/** Current simulation state */
 	EPatientState CurrentState = EPatientState::LyingDown;
+
+    bool bTrainingPatientAllowed = true;
+    bool bTrainingBeltAllowed = true;
+    FTransform BedCheckpointTransform;
+    UPROPERTY(Transient) TObjectPtr<UAnimSequence> BedCheckpointAnimation;
+    float BedCheckpointPosition = 0.f;
 
 	/** Currently attached belt */
 	UPROPERTY()

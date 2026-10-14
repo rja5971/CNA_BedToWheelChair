@@ -25,6 +25,7 @@
 #include "EdGraph/EdGraphPin.h"
 #include "Misc/AutomationTest.h"
 #include "UObject/UnrealType.h"
+#include "UObject/Script.h"
 
 #include "Components/TransferGuidanceComponent.h"
 #include "Transfer/TransferManagerActor.h"
@@ -185,13 +186,9 @@ bool FCNATransferGuidanceTest::RunTest(const FString& Parameters)
     UTransferGuidanceComponent* Hints = Manager->GetTransferGuidance();
     auto Check = [&](const TCHAR* Description, ETransferHintStep Expected) { Hints->RefreshHints(); TestTrue(Description, Hints->GetHintStep() == Expected); };
     Check(TEXT("Launch shows accepted patient grab"), ETransferHintStep::GrabPatient);
-    TestNotNull(TEXT("Ghost mesh exists"), Hints->Hand.Get());
-    if (Hints->Hand && Hints->Hand->DoesSocketExist(TEXT("hand_r")))
-    {
-        const FTransform Contact = Hints->VisualSettings.HeadHandPose * FTransform(Hints->GrabTarget().GetRotation(), Hints->GrabTarget().GetLocation());
-        TestTrue(TEXT("Right ghost uses right wrist despite shared skeleton containing both hands"), Hints->Hand->GetSocketLocation(TEXT("hand_r")).Equals(Contact.GetLocation(), .1f));
-    }
-    for (UPrimitiveComponent* Visual : TArray<UPrimitiveComponent*>{Hints->Hand.Get(), Hints->SeatedGhost.Get(), Hints->BeltGhost.Get(), Hints->Target.Get(), Hints->ArrowShaft.Get(), Hints->ArrowHead.Get(), Hints->Label.Get()})
+    TArray<USkeletalMeshComponent*> Ghosts; Manager->GetComponents(Ghosts);
+    TestEqual(TEXT("Only the seated-patient ghost exists; hand holograms removed"), Ghosts.Num(), 1);
+    for (UPrimitiveComponent* Visual : TArray<UPrimitiveComponent*>{Hints->SeatedGhost.Get(), Hints->BeltGhost.Get(), Hints->Target.Get(), Hints->ArrowShaft.Get(), Hints->ArrowHead.Get(), Hints->Label.Get()})
     {
         if (!Visual) continue;
         TestTrue(TEXT("Guidance never participates in traces or physics"), Visual->GetCollisionEnabled() == ECollisionEnabled::NoCollision);
@@ -201,7 +198,6 @@ bool FCNATransferGuidanceTest::RunTest(const FString& Parameters)
     }
     Patient->OnGrabbed(Grab, TEXT("neck_01"), Patient->GetPatientMesh()->GetSocketLocation(TEXT("neck_01")));
     Check(TEXT("Successful neck grab advances to lift"), ETransferHintStep::SitUp);
-    TestFalse(TEXT("Contact ghost disappears after grab"), Hints->Hand->IsVisible());
     Patient->OnReleased(Grab);
     Check(TEXT("Early release restores neck hint"), ETransferHintStep::GrabPatient);
     Patient->SetInteractionPhase(EPatientInteractionPhase::BedSeating);
@@ -232,7 +228,7 @@ bool FCNATransferGuidanceTest::RunTest(const FString& Parameters)
     TestNull(TEXT("Occupied chair is excluded"), Hints->GetSelectedWheelchair());
     TestTrue(TEXT("No seating or release instruction without ready chair"), Hints->GetHintStep() == ETransferHintStep::LiftAndCarry);
     Alternative->Destroy(); Alternative = World->SpawnActor<AWheelchairActor>();
-    Alternative->SetActorLocation(FVector(150,0,0)); Alternative->LockBrakes(); Chair->LockBrakes();
+    Alternative->SetActorLocation(FVector(150,0,0)); Alternative->SetActorRotation(FRotator(0, 73, 0)); Alternative->LockBrakes(); Chair->LockBrakes();
     State->ForceState(ETransferState::WheelchairTransfer);
     Patient->SetInteractionPhase(EPatientInteractionPhase::BeltTransfer);
     Check(TEXT("Carry state guides toward seat"), ETransferHintStep::MoveToSeat);
@@ -245,7 +241,8 @@ bool FCNATransferGuidanceTest::RunTest(const FString& Parameters)
     Check(TEXT("Release shown only inside actual commit zone"), ETransferHintStep::ReleaseToSeat);
     TestEqual(TEXT("Hint follows actual latched chair, overriding configured chair"), Hints->GetSelectedWheelchair(), Alternative);
     TestTrue(TEXT("Seated ghost pelvis aligns to SeatTarget"), Hints->SeatedGhost->GetSocketLocation(Patient->GetPelvisBoneName()).Equals(Seat, .1f));
-    Alternative->AddActorWorldOffset(FVector(10,0,0)); Hints->UpdateVisuals();
+    TestTrue(TEXT("Ghost mesh yaw matches actual calibrated seated-patient yaw"), Hints->SeatedGhost->GetComponentQuat().Equals(Alternative->GetTargetSeatTransform().GetRotation(), .001f));
+    Alternative->AddActorWorldOffset(FVector(10,0,0)); Alternative->AddActorWorldRotation(FRotator(0, 45, 0)); Hints->UpdateVisuals();
     TestTrue(TEXT("Moving chair updates ghost anchor every frame"), Hints->SeatedGhost->GetSocketLocation(Patient->GetPelvisBoneName()).Equals(Alternative->GetTargetSeatTransform().GetLocation(), .1f));
     Alternative->Destroy(); Hints->UpdateVisuals();
     TestEqual(TEXT("Removed latched chair immediately falls back to valid chair"), Hints->GetSelectedWheelchair(), Chair);
@@ -274,6 +271,9 @@ bool FCNATransferGuidanceTest::RunTest(const FString& Parameters)
         if (TestNotNull(TEXT("Menu can be constructed"), Menu))
         {
             Menu->TakeWidget();
+            UButton* Exit = Cast<UButton>(Menu->WidgetTree->FindWidget(TEXT("ExitButton")));
+            UTextBlock* Quit = Exit ? Cast<UTextBlock>(Exit->GetContent()) : nullptr;
+            TestTrue(TEXT("Exit button clearly says Quit"), Quit && Quit->GetText().ToString() == TEXT("Quit"));
             UButton* Button = Cast<UButton>(Menu->WidgetTree->FindWidget(TEXT("HintsButton")));
             UTextBlock* Label = Cast<UTextBlock>(Menu->WidgetTree->FindWidget(TEXT("HintsLabel")));
             if (TestNotNull(TEXT("Hints button added to existing menu"), Button) && TestNotNull(TEXT("Hints button label"), Label))
@@ -326,6 +326,8 @@ bool FCNAPatientCompletionTest::RunTest(const FString& Parameters)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCNAPatientRoomUITest, "CNA.PatientInteraction.RoomConversationDisabled", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 bool FCNAPatientRoomUITest::RunTest(const FString& Parameters)
 {
+    // Editor map actors do not execute Blueprint ProcessEvent without this guard.
+    FEditorScriptExecutionGuard AllowBlueprintCallbacks;
     UWorld* World = UEditorLoadingAndSavingUtils::LoadMap(TEXT("/Game/Project/Maps/CNA_Map_01"));
     if (!TestNotNull(TEXT("Training map loads"), World)) return false;
     int32 Count = 0;
@@ -333,7 +335,17 @@ bool FCNAPatientRoomUITest::RunTest(const FString& Parameters)
     {
         if (!Actor || Actor->GetClass()->GetName() != TEXT("BP_PatientChat_C")) continue;
         ++Count;
-        TestFalse(TEXT("Placed conversation is disabled"), UCNAReliabilityLibrary::IsPatientConversationEnabled(Actor));
+        FBoolProperty* EnabledFlag = FindFProperty<FBoolProperty>(Actor->GetClass(), TEXT("bEnablePatientConversation"));
+        if (!TestNotNull(TEXT("Conversation enable flag exists"), EnabledFlag)) continue;
+        TestTrue(TEXT("Delivery map retains enabled conversation"), EnabledFlag->GetPropertyValue_InContainer(Actor));
+        const FBoolProperty* Preview = FindFProperty<FBoolProperty>(Actor->GetClass(), TEXT("bShowConversationForUITesting"));
+        TestTrue(TEXT("Delivery preview flag is off"), Preview && !Preview->GetPropertyValue_InContainer(Actor));
+        TestFalse(TEXT("Entry stage blocks premature conversation activation"), UCNAReliabilityLibrary::IsPatientConversationEnabled(Actor));
+        UCNAReliabilityLibrary::CallNoArgs(Actor, TEXT("EnableChatPanel"));
+        UWidgetComponent* Premature = Cast<UWidgetComponent>(UCNAReliabilityLibrary::ObjectProperty(Actor, TEXT("ChatPanel")));
+        TestTrue(TEXT("Stage gate keeps premature panel noninteractive"), Premature && !Premature->IsVisible() && Premature->GetCollisionEnabled() == ECollisionEnabled::NoCollision);
+        // Exercise the disabled feature policy on this temporary loaded instance, never save it.
+        EnabledFlag->SetPropertyValue_InContainer(Actor, false);
         UCNAReliabilityLibrary::CallNoArgs(Actor, TEXT("EnableChatPanel"));
         UWidgetComponent* Panel = Cast<UWidgetComponent>(UCNAReliabilityLibrary::ObjectProperty(Actor, TEXT("ChatPanel")));
         if (!TestNotNull(TEXT("ChatPanel reference retained"), Panel)) continue;
@@ -341,6 +353,14 @@ bool FCNAPatientRoomUITest::RunTest(const FString& Parameters)
         TestTrue(TEXT("Invisible panel has no pointer collision"), Panel->GetCollisionEnabled() == ECollisionEnabled::NoCollision);
         const FBoolProperty* Flag = FindFProperty<FBoolProperty>(Actor->GetClass(), TEXT("bEnablePatientConversation"));
         TestTrue(TEXT("Conversation flag remains enabled by default outside this instance"), Flag && Flag->GetPropertyValue_InContainer(Actor->GetClass()->GetDefaultObject()));
+        Panel->InitWidget();
+        if (UObject* UI = Panel->GetUserWidgetObject())
+        {
+            if (FObjectPropertyBase* Owner = FindFProperty<FObjectPropertyBase>(UI->GetClass(), TEXT("OwningActor"))) Owner->SetObjectPropertyValue_InContainer(UI, Actor);
+            TestFalse(TEXT("Disabled Interact callback is rejected"), UCNAReliabilityLibrary::BeginGuidedConversationResponse(UI));
+            TestFalse(TEXT("Disabled Next callback is rejected"), UCNAReliabilityLibrary::BeginGuidedTransferLesson(UI));
+        }
+        EnabledFlag->SetPropertyValue_InContainer(Actor, true);
     }
     TestEqual(TEXT("Exactly one room conversation override"), Count, 1);
     UBlueprint* Widget = LoadObject<UBlueprint>(nullptr, TEXT("/Game/Project/Blueprints/UI/WBP_PatientChat"));
@@ -354,7 +374,8 @@ bool FCNAPatientRoomUITest::RunTest(const FString& Parameters)
                 ++Buttons;
                 UEdGraphPin* Then = Event->FindPin(TEXT("then"));
                 TestTrue(TEXT("Button callback enters conversation policy before lesson effects"), Then && Then->LinkedTo.Num() == 1
-                    && Then->LinkedTo[0]->GetOwningNode()->NodeComment == TEXT("PatientConversationPolicy"));
+                    && (Then->LinkedTo[0]->GetOwningNode()->NodeComment == TEXT("CNA_GuidedGate")
+                        || Then->LinkedTo[0]->GetOwningNode()->NodeComment == TEXT("CNA_GuidedCallback")));
             }
     TestEqual(TEXT("Both interact and next buttons are guarded"), Buttons, 2);
     return true;

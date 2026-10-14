@@ -15,6 +15,7 @@
 #include "../Transfer/BeltActor.h"
 #include "UObject/UObjectIterator.h"
 #include "Animation/AnimSequence.h"
+#include "Animation/AnimSingleNodeInstance.h"
 #include "Engine/Engine.h"
 
 APatientActor::APatientActor()
@@ -180,13 +181,13 @@ void APatientActor::Tick(float DeltaTime)
 
 bool APatientActor::IsGrabInteractionEnabled() const
 {
-	return InteractionPhase == EPatientInteractionPhase::BedPreparation && !bSpineDamaged;
+	return bTrainingPatientAllowed && InteractionPhase == EPatientInteractionPhase::BedPreparation && !bSpineDamaged;
 }
 
 bool APatientActor::CanGrabBelt() const
 {
-	return InteractionPhase == EPatientInteractionPhase::BedPreparation
-		|| InteractionPhase == EPatientInteractionPhase::BeltTransfer;
+	return bTrainingBeltAllowed && !bSpineDamaged && (InteractionPhase == EPatientInteractionPhase::BedPreparation
+		|| InteractionPhase == EPatientInteractionPhase::BeltTransfer);
 }
 
 void APatientActor::SetInteractionPhase(EPatientInteractionPhase Phase)
@@ -536,6 +537,7 @@ void APatientActor::SetPatientState(EPatientState NewState)
 	if (NewState == EPatientState::LyingDown && InteractionPhase != EPatientInteractionPhase::BedPreparation)
 	{
 		bIsPureAnimationDriven = false;
+        BedCheckpointAnimation = nullptr;
 		SetInteractionPhase(EPatientInteractionPhase::BedPreparation);
 	}
 	else if (InteractionPhase == EPatientInteractionPhase::Complete && NewState != EPatientState::Seated) return;
@@ -867,8 +869,11 @@ void APatientActor::OnBedSeatedBlendFinished()
 
 void APatientActor::OnBedCinematicFinished()
 {
-	if (InteractionPhase == EPatientInteractionPhase::BedSeating)
-		SetInteractionPhase(EPatientInteractionPhase::BeltTransfer);
+    if (InteractionPhase == EPatientInteractionPhase::BedSeating)
+    {
+        SetInteractionPhase(EPatientInteractionPhase::BeltTransfer);
+        CaptureBedCheckpoint();
+    }
 }
 
 // ============================================================
@@ -938,3 +943,65 @@ bool APatientActor::BoneMatchesAnyRole(FName BoneName, const TArray<EPatientBone
 
 
 
+
+void APatientActor::SetTrainingPermissions(bool bPatientAllowed, bool bBeltAllowed)
+{
+    if (bTrainingPatientAllowed == bPatientAllowed && bTrainingBeltAllowed == bBeltAllowed) return;
+    bTrainingPatientAllowed = bPatientAllowed;
+    bTrainingBeltAllowed = bBeltAllowed;
+    // Permission changes can occur without a physical phase change.
+    TArray<UGrabComponent*> Cancel;
+    for (TObjectIterator<UGrabComponent> It; It; ++It)
+    {
+        if (!IsValid(*It) || It->GetWorld() != GetWorld()) continue;
+        AActor* Target = It->GetGrabbedActor();
+        ABeltActor* Belt = Cast<ABeltActor>(Target);
+        if ((Target == this && !IsGrabInteractionEnabled())
+            || (Belt && Belt->GetInteractionPatient() == this && !CanGrabBelt())) Cancel.Add(*It);
+    }
+    for (UGrabComponent* Hand : Cancel) Hand->CancelInteraction();
+}
+
+bool APatientActor::CaptureBedCheckpoint()
+{
+    if (!PatientMesh || !SeatedTransition || !SeatedTransition->IsBedSeatedFinalized()
+        || SeatedTransition->HasSeatTarget() || InteractionPhase != EPatientInteractionPhase::BeltTransfer
+        || (PatientCinematic && PatientCinematic->IsCinematicActive())) return false;
+    UAnimSingleNodeInstance* Animation = PatientMesh->GetSingleNodeInstance();
+    UAnimSequence* Sequence = Animation ? Cast<UAnimSequence>(Animation->GetCurrentAsset()) : nullptr;
+    if (!Sequence || PatientMesh->IsSimulatingPhysics()) return false;
+    BedCheckpointTransform = PatientMesh->GetComponentTransform();
+    BedCheckpointAnimation = Sequence;
+    BedCheckpointPosition = Animation->GetCurrentTime();
+    return true;
+}
+
+bool APatientActor::RestoreBedCheckpoint()
+{
+    if (!BedCheckpointAnimation || !PatientMesh || !PatientPhysics || !AttachedBelt || bSpineDamaged
+        || InteractionPhase != EPatientInteractionPhase::BeltTransfer
+        || (SeatedTransition && SeatedTransition->HasSeatTarget())
+        || AttachedBelt->GetActiveGrabCount() != 0) return false;
+    if (PatientCarry) PatientCarry->PrepareForSeating();
+    AttachedBelt->ConsumeFinalHandleRelease();
+    PatientPhysics->ClearHeldPose();
+    if (SeatedTransition) SeatedTransition->ResetTransition();
+    bIsPureAnimationDriven = true;
+    PatientMesh->SetAllBodiesSimulatePhysics(false);
+    PatientMesh->SetSimulatePhysics(false);
+    PatientMesh->SetAllBodiesPhysicsBlendWeight(0.f, false);
+    PatientMesh->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+    PatientMesh->SetAnimationMode(EAnimationMode::AnimationSingleNode);
+    PatientMesh->SetAnimation(BedCheckpointAnimation);
+    PatientMesh->SetPlayRate(1.f);
+    PatientMesh->Play(true);
+    PatientMesh->SetPosition(BedCheckpointPosition);
+    PatientMesh->SetWorldTransform(BedCheckpointTransform, false, nullptr, ETeleportType::TeleportPhysics);
+    PatientMesh->TickAnimation(0.f, false);
+    PatientMesh->RefreshBoneTransforms();
+    CurrentState = EPatientState::BeltAttached;
+    ActiveProfile = EPhysicalAnimProfile::Seated;
+    OnPatientStateChanged.Broadcast(CurrentState);
+    UE_LOG(LogTemp, Display, TEXT("GuidedTraining: restored seated bed checkpoint with belt attached"));
+    return true;
+}

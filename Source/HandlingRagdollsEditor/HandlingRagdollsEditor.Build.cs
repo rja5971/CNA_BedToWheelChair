@@ -32,10 +32,12 @@ public class HandlingRagdollsEditor : ModuleRules
 			"Kismet",
 			"KismetCompiler",
 			"UMG",
+			"UMGEditor",
 			"EnhancedInput",
 			"MediaAssets"
 		});
 
+		// Rendered popup layout checks are part of editor automation.
 		// Include runtime module headers
 		PublicIncludePaths.Add(Path.Combine(ModuleDirectory, "../HandlingRagdolls"));
 	}

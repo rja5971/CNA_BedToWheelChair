@@ -60,5 +60,5 @@ FText UBeltAttachState::GetInstructions() const
 	{
 		return FText::FromString(TEXT("Belt attached! Now grab the belt handles and carefully lift the patient."));
 	}
-	return FText::FromString(TEXT("Attach the transfer belt around the patient's torso. Keep supporting the neck!"));
+	return FText::FromString(TEXT("Pick up the belt and bring it to the seated patient's torso to attach it."));
 }

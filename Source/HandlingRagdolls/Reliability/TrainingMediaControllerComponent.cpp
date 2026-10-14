@@ -1,4 +1,5 @@
 #include "TrainingMediaControllerComponent.h"
+#include "../Transfer/TransferManagerActor.h"
 #include "CNAReliabilityLibrary.h"
 #include "TrainingMediaErrorWidget.h"
 #include "MediaPlayer.h"
@@ -81,6 +82,8 @@ UTrainingMediaControllerComponent::UTrainingMediaControllerComponent()
 void UTrainingMediaControllerComponent::RequestPlayback(AActor* Display)
 {
     if (!IsValid(Display) || bEndingPlay || CompletedDisplays.Contains(Display)) return;
+    if (ATransferManagerActor* Manager = UCNAReliabilityLibrary::GuidedManager(Display))
+        if (!Manager->CanRequestLesson(Display)) return;
     if (ActiveDisplay == Display && Session.State != FTrainingPlaybackSession::EState::Idle) return;
     if (ActiveDisplay) CancelPlayback(ActiveDisplay);
     ActiveDisplay = Display;
@@ -189,6 +192,7 @@ void UTrainingMediaControllerComponent::MediaEnded()
     ActiveDisplay = nullptr;
     Source = nullptr;
     UE_LOG(LogCNAMedia, Display, TEXT("Completed display=%s (training completion dispatched once)"), *GetNameSafe(Completed));
+    if (ATransferManagerActor* Manager = UCNAReliabilityLibrary::GuidedManager(Completed)) Manager->LessonCompleted(Completed);
     UCNAReliabilityLibrary::CallNoArgs(Completed, TEXT("NotifyPlaybackComplete"));
 }
 
@@ -223,7 +227,14 @@ void UTrainingMediaControllerComponent::SetPresentation(bool bVisible)
 {
     if (!IsValid(ActiveDisplay)) return;
     for (FName Name : { FName(TEXT("ScreenMesh")), FName(TEXT("TextWidget")) })
-        if (USceneComponent* Component = Cast<USceneComponent>(UCNAReliabilityLibrary::ObjectProperty(ActiveDisplay, Name))) Component->SetVisibility(bVisible);
+        if (USceneComponent* Component = Cast<USceneComponent>(UCNAReliabilityLibrary::ObjectProperty(ActiveDisplay, Name))) {
+            Component->SetVisibility(bVisible);
+            if (UWidgetComponent* Widget = Cast<UWidgetComponent>(Component))
+            {
+                Widget->SetCollisionEnabled(bVisible ? ECollisionEnabled::QueryOnly : ECollisionEnabled::NoCollision);
+                if (UUserWidget* Instance = Widget->GetUserWidgetObject()) Instance->SetIsEnabled(bVisible);
+            }
+        }
     if (!bVisible)
         if (UAudioComponent* Audio = Cast<UAudioComponent>(UCNAReliabilityLibrary::ObjectProperty(ActiveDisplay, TEXT("AudioPlayer")))) Audio->Stop();
 }

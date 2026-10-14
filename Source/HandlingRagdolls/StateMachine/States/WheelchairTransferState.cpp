@@ -1,6 +1,8 @@
 // Fill out your copyright notice in the Description page of Project Settings.
 
 #include "WheelchairTransferState.h"
+#include "../../Reliability/CNAReliabilityLibrary.h"
+#include "../../Transfer/TransferManagerActor.h"
 #include "../TransferStateMachine.h"
 #include "../../Interfaces/IPatient.h"
 #include "../../Interfaces/ISpineMonitorable.h"
@@ -179,6 +181,7 @@ void UWheelchairTransferState::TickState(float DeltaTime)
 			bSeatingTransitionStarted = false;
 			ActiveWheelchair.Reset();
 			UE_LOG(LogTemp, Warning, TEXT("WheelchairTransfer: Seating rejected; belt interaction remains available for retry."));
+            if (ATransferManagerActor* Manager = UCNAReliabilityLibrary::GuidedManager(OwningStateMachine)) Manager->ScheduleLiftRetry();
 		}
 		else
 		{

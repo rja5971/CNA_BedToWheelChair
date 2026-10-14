@@ -1,4 +1,5 @@
 #include "TransferGuidanceComponent.h"
+#include "../Transfer/TransferManagerActor.h"
 #include "../Patient/PatientActor.h"
 #include "../Transfer/BeltActor.h"
 #include "../Transfer/WheelchairActor.h"
@@ -28,15 +29,12 @@ UTransferGuidanceComponent::UTransferGuidanceComponent()
     PrimaryComponentTick.bCanEverTick = true;
     PrimaryComponentTick.TickGroup = TG_PostUpdateWork;
     static ConstructorHelpers::FObjectFinder<UMaterialInterface> Material(TEXT("/Game/PatientSetup/Guidance/M_TransferGhost"));
-    static ConstructorHelpers::FObjectFinder<USkeletalMesh> Left(TEXT("/Game/Characters/MannequinsXR/Meshes/SKM_MannyXR_left"));
-    static ConstructorHelpers::FObjectFinder<USkeletalMesh> Right(TEXT("/Game/Characters/MannequinsXR/Meshes/SKM_MannyXR_right"));
-    static ConstructorHelpers::FObjectFinder<UAnimSequence> Grasp(TEXT("/Game/Characters/MannequinsXR/Animations/A_MannequinsXR_Grasp_Right"));
     static ConstructorHelpers::FObjectFinder<UAnimSequence> Seated(TEXT("/Game/Animations/SittingIdle_1__UE"));
     static ConstructorHelpers::FObjectFinder<UStaticMesh> Sphere(TEXT("/Engine/BasicShapes/Sphere"));
     static ConstructorHelpers::FObjectFinder<UStaticMesh> Cylinder(TEXT("/Engine/BasicShapes/Cylinder"));
     static ConstructorHelpers::FObjectFinder<UStaticMesh> Cone(TEXT("/Engine/BasicShapes/Cone"));
-    GhostMaterial = Material.Object; LeftHandMesh = Left.Object; RightHandMesh = Right.Object;
-    HandPose = Grasp.Object; ChairPose = Seated.Object;
+    GhostMaterial = Material.Object;
+    ChairPose = Seated.Object;
     SphereMesh = Sphere.Object; CylinderMesh = Cylinder.Object; ConeMesh = Cone.Object;
 }
 
@@ -139,6 +137,8 @@ void UTransferGuidanceComponent::RefreshHints()
     Step = ETransferHintStep::None;
     SelectedChair.Reset();
     if (!StateMachine || !BoundPatient || !BoundBelt || bTransferFailed || !AreHintsEnabled() || IsMenuOpen()) { HideVisuals(); return; }
+    if (const ATransferManagerActor* Manager = Cast<ATransferManagerActor>(GetOwner()))
+        if (Manager->bGuidedTraining && Manager->GetTrainingStage() != EGuidedTrainingStage::Transfer) { HideVisuals(); return; }
     const EPatientInteractionPhase Phase = BoundPatient->GetInteractionPhase();
     if (Phase == EPatientInteractionPhase::BedSeating || Phase == EPatientInteractionPhase::WheelchairSeating
         || Phase == EPatientInteractionPhase::Complete || StateMachine->GetCurrentState() == ETransferState::Failed
@@ -178,7 +178,7 @@ void UTransferGuidanceComponent::RefreshHints()
         else Step = ETransferHintStep::LiftAndCarry;
     }
     if (Previous != Step) LoopElapsed = 0.f;
-    if (Step != ETransferHintStep::None && !Hand) CreateVisuals();
+    if (Step != ETransferHintStep::None && !Target) CreateVisuals();
     UpdateVisuals();
 }
 
@@ -225,12 +225,6 @@ void UTransferGuidanceComponent::CreateVisuals()
         Component->SetCastShadow(false); Component->SetVisibility(false);
         Component->RegisterComponent();
     };
-    Hand = NewObject<USkeletalMeshComponent>(GetOwner());
-    Hand->SetSkeletalMesh(RightHandMesh); Hand->SetAnimationMode(EAnimationMode::AnimationSingleNode);
-    Hand->SetAnimation(HandPose); Setup(Hand);
-    Hand->SetPosition(HandPose ? HandPose->GetPlayLength() * .65f : 0.f);
-    Hand->TickAnimation(0.f, false); Hand->RefreshBoneTransforms(); Hand->SetComponentTickEnabled(false);
-    for (int32 Index = 0; Index < Hand->GetNumMaterials(); ++Index) Hand->SetMaterial(Index, GhostMID);
     SeatedGhost = NewObject<USkeletalMeshComponent>(GetOwner());
     SeatedGhost->SetSkeletalMesh(BoundPatient->GetPatientMesh()->GetSkeletalMeshAsset());
     SeatedGhost->SetAnimationMode(EAnimationMode::AnimationSingleNode); SeatedGhost->SetAnimation(ChairPose);
@@ -253,13 +247,13 @@ void UTransferGuidanceComponent::CreateVisuals()
 
 void UTransferGuidanceComponent::HideVisuals()
 {
-    for (USceneComponent* Component : TArray<USceneComponent*>{ Hand.Get(), SeatedGhost.Get(), Target.Get(), BeltGhost.Get(), ArrowShaft.Get(), ArrowHead.Get(), Label.Get() })
+    for (USceneComponent* Component : TArray<USceneComponent*>{ SeatedGhost.Get(), Target.Get(), BeltGhost.Get(), ArrowShaft.Get(), ArrowHead.Get(), Label.Get() })
         if (Component) Component->SetVisibility(false);
 }
 
 void UTransferGuidanceComponent::UpdateVisuals()
 {
-    if (!Hand || Step == ETransferHintStep::None || bTransferFailed || !AreHintsEnabled() || IsMenuOpen()) { HideVisuals(); return; }
+    if (!Target || Step == ETransferHintStep::None || bTransferFailed || !AreHintsEnabled() || IsMenuOpen()) { HideVisuals(); return; }
     // Enforce locks every frame, including the interval between 10 Hz decisions.
     const auto Phase = BoundPatient->GetInteractionPhase();
     if (Phase == EPatientInteractionPhase::BedSeating || Phase == EPatientInteractionPhase::WheelchairSeating || Phase == EPatientInteractionPhase::Complete
@@ -300,40 +294,6 @@ void UTransferGuidanceComponent::UpdateVisuals()
         BeltGhost->SetWorldScale3D(BoundBelt->GetActorScale3D() * 1.025f);
         BeltGhost->SetVisibility(true);
     }
-    const bool bGrab = Step == ETransferHintStep::GrabPatient || Step == ETransferHintStep::PickUpBelt || Step == ETransferHintStep::GrabBeltHandle;
-    Hand->SetVisibility(bGrab);
-    if (bGrab)
-    {
-        USkeletalMesh* HandMesh = RightHandMesh;
-        float Closest = TNumericLimits<float>::Max();
-        if (APawn* Pawn = UGameplayStatics::GetPlayerPawn(this, 0))
-        {
-            TArray<UGrabComponent*> Hands; Pawn->GetComponents(Hands);
-            for (UGrabComponent* Grabber : Hands)
-                if (!Grabber->IsGrabbing() && Grabber->GetTraceOrigin())
-                {
-                    const float Distance = FVector::DistSquared(Grabber->GetTraceOrigin()->GetComponentLocation(), Anchor.GetLocation());
-                    if (Distance < Closest)
-                    {
-                        Closest = Distance;
-                        HandMesh = Grabber->GetName().Contains(TEXT("Left")) ? LeftHandMesh.Get() : RightHandMesh.Get();
-                    }
-                }
-        }
-        if (Hand->GetSkeletalMeshAsset() != HandMesh)
-        {
-            Hand->SetSkeletalMesh(HandMesh); Hand->SetAnimation(HandPose);
-            Hand->SetPosition(HandPose ? HandPose->GetPlayLength() * .65f : 0.f);
-            Hand->TickAnimation(0.f, false); Hand->RefreshBoneTransforms();
-            for (int32 Index = 0; Index < Hand->GetNumMaterials(); ++Index) Hand->SetMaterial(Index, GhostMID);
-        }
-        const FTransform Pose = Step == ETransferHintStep::GrabPatient ? VisualSettings.HeadHandPose : VisualSettings.BeltHandPose;
-        const FTransform Contact = Pose * FTransform(Anchor.GetRotation(), Anchor.GetLocation());
-        Hand->SetWorldTransform(Contact);
-        const FName Wrist = HandMesh == LeftHandMesh ? FName(TEXT("hand_l")) : FName(TEXT("hand_r"));
-        if (Hand->DoesSocketExist(Wrist)) Hand->AddWorldOffset(Contact.GetLocation() - Hand->GetSocketLocation(Wrist));
-        Hand->SetVisibility(true);
-    }
     FVector From = Anchor.GetLocation(), To = From;
     if (Step == ETransferHintStep::SitUp) To += VisualSettings.SitUpDirection;
     else if (Step == ETransferHintStep::AttachBelt) { From = BoundBelt->GetActorLocation(); To = Position; }
@@ -365,9 +325,11 @@ void UTransferGuidanceComponent::UpdateVisuals()
         SeatedGhost->SetWorldTransform(FTransform(Seat.GetRotation(), Seat.GetLocation(), BoundPatient->GetPatientMesh()->GetComponentScale()));
         if (SeatedGhost->DoesSocketExist(Pelvis))
         {
-            const float Yaw = Seat.Rotator().Yaw - SeatedGhost->GetSocketRotation(Pelvis).Yaw;
-            SeatedGhost->AddWorldRotation(FRotator(0, Yaw, 0));
+            // Use the same calibrated mesh yaw as native chair seating, then refresh before centring.
+            SeatedGhost->TickAnimation(0.f, false);
+            SeatedGhost->RefreshBoneTransforms();
             SeatedGhost->AddWorldOffset(Seat.GetLocation() - SeatedGhost->GetSocketLocation(Pelvis));
+            SeatedGhost->RefreshBoneTransforms();
         }
         SeatedGhost->SetVisibility(true);
     }
@@ -388,7 +350,7 @@ void UTransferGuidanceComponent::TickComponent(float DeltaTime, ELevelTick TickT
 void UTransferGuidanceComponent::EndPlay(const EEndPlayReason::Type Reason)
 {
     UnbindEvents(); HideVisuals();
-    for (USceneComponent* Component : TArray<USceneComponent*>{ Hand.Get(), SeatedGhost.Get(), Target.Get(), BeltGhost.Get(), ArrowShaft.Get(), ArrowHead.Get(), Label.Get() })
+    for (USceneComponent* Component : TArray<USceneComponent*>{ SeatedGhost.Get(), Target.Get(), BeltGhost.Get(), ArrowShaft.Get(), ArrowHead.Get(), Label.Get() })
         if (Component) Component->DestroyComponent();
     Super::EndPlay(Reason);
 }

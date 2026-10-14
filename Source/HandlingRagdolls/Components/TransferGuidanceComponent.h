@@ -44,8 +44,6 @@ USTRUCT(BlueprintType)
 struct FTransferGuidanceVisualSettings
 {
     GENERATED_BODY()
-    UPROPERTY(EditAnywhere, BlueprintReadWrite) FTransform HeadHandPose = FTransform(FRotator(0, 90, 0), FVector(0, -6, 8));
-    UPROPERTY(EditAnywhere, BlueprintReadWrite) FTransform BeltHandPose = FTransform(FRotator(0, 0, 90), FVector(0, 0, 6));
     UPROPERTY(EditAnywhere, BlueprintReadWrite) FVector SitUpDirection = FVector(0, 0, 40);
     UPROPERTY(EditAnywhere, BlueprintReadWrite) FVector LiftDirection = FVector(0, 0, 25);
     UPROPERTY(EditAnywhere, BlueprintReadWrite) FVector LabelOffset = FVector(0, 0, 22);
@@ -96,7 +94,6 @@ private:
     UPROPERTY(Transient) TObjectPtr<UTransferStateMachine> StateMachine;
     UPROPERTY(Transient) TObjectPtr<APatientActor> BoundPatient;
     UPROPERTY(Transient) TObjectPtr<ABeltActor> BoundBelt;
-    UPROPERTY(Transient) TObjectPtr<USkeletalMeshComponent> Hand;
     UPROPERTY(Transient) TObjectPtr<USkeletalMeshComponent> SeatedGhost;
     UPROPERTY(Transient) TObjectPtr<UStaticMeshComponent> Target;
     UPROPERTY(Transient) TObjectPtr<UStaticMeshComponent> BeltGhost;
@@ -106,9 +103,6 @@ private:
     UPROPERTY(Transient) TObjectPtr<UTextRenderComponent> Label;
     UPROPERTY(Transient) TObjectPtr<UMaterialInstanceDynamic> GhostMID;
     UPROPERTY() TObjectPtr<UMaterialInterface> GhostMaterial;
-    UPROPERTY() TObjectPtr<USkeletalMesh> LeftHandMesh;
-    UPROPERTY() TObjectPtr<USkeletalMesh> RightHandMesh;
-    UPROPERTY() TObjectPtr<UAnimSequence> HandPose;
     UPROPERTY() TObjectPtr<UAnimSequence> ChairPose;
     UPROPERTY() TObjectPtr<UStaticMesh> SphereMesh;
     UPROPERTY() TObjectPtr<UStaticMesh> CylinderMesh;

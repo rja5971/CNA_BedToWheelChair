@@ -17,7 +17,8 @@
 
 ATransferManagerActor::ATransferManagerActor()
 {
-	PrimaryActorTick.bCanEverTick = false;
+	PrimaryActorTick.bCanEverTick = true;
+    PrimaryActorTick.TickInterval = 0.1f;
 
 	// Create the orchestration components
 	StateMachine = CreateDefaultSubobject<UTransferStateMachine>(TEXT("TransferStateMachine"));
@@ -98,7 +99,13 @@ void ATransferManagerActor::BeginPlay()
 		SpineMonitor->SetMonitorTarget(PatientRef);
 	}
 
-	if (bAutoStart)
+    if (bGuidedTraining)
+    {
+        if (PatientRef) PatientRef->SetTrainingPermissions(false, false);
+        StateMachine->OnTransferCompleted.AddDynamic(this, &ATransferManagerActor::TransferCompleted);
+        StateMachine->OnTransferFailed.AddDynamic(this, &ATransferManagerActor::TransferFailed);
+    }
+	if (bAutoStart && !bGuidedTraining)
 	{
 		StartTransfer();
 	}
@@ -109,6 +116,7 @@ void ATransferManagerActor::BeginPlay()
 
 void ATransferManagerActor::StartTransfer()
 {
+    if (bGuidedTraining && TrainingStage != EGuidedTrainingStage::Transfer) return;
 	if (StateMachine)
 	{
 		StateMachine->StartTask();

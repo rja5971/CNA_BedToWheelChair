@@ -135,11 +135,12 @@ geometry cannot obscure either camera-sphere fade. Its graph and timing are unch
 
 `UTransferGuidanceComponent` on the transfer manager observes successful grabs,
 patient phase locks, belt attachment/carry, and the transfer state's latched chair.
-It renders cyan ghost hands, a belt target, movement arrows and a frozen seated
-patient aligned by pelvis to `SeatTarget`. The actual commit zone controls the
+It renders a belt target, movement arrows and a frozen seated patient aligned
+by pelvis to `SeatTarget`, with the same mesh orientation as native seating.
+The faulty hand holograms have been removed. The actual commit zone controls the
 green release cue. Guidance has no collision, physics, shadows or navigation
 influence. Decisions refresh on interaction events and at 10 Hz; anchors update
-every frame. Pose offsets, path vectors, label offsets and colors are editable
+every frame. Path vectors, label offsets and colors are editable
 in the manager's **TransferGuidance / VisualSettings**.
 
 The existing menu adds **Hints: On/Off** using the existing controller cursor.
@@ -164,3 +165,21 @@ Tests can be executed via the Unreal Engine Session Frontend or via commandlet:
 ```powershell
 UnrealEditor-Cmd.exe "<ProjectPath>/CNABedToWheelchair.uproject" -ExecCmds="Automation RunTests CNA." -TestExit="Automation Test Queue Empty" -stdout -dx12
 ```
+
+## Guided training delivery
+
+The saved training map now coordinates entry quiz, bathroom video/Continue,
+patient conversation, transfer video and the native patient transfer through
+`TransferManagerActor.bGuidedTraining`. Required instructions remain visible
+with Hints off. An interrupted lift returns to the post-rotation seated bed
+checkpoint with the belt attached, without replaying lessons or resetting score.
+Quizzes, videos and bed seating permit turning and movement within an editable
+five-metre horizontal radius. Adjust **Training Movement Radius Meters** on the
+placed transfer manager under **CNA / Training / Movement**. Room fades and the
+accepted chair handoff retain their movement locks. The exit button says **Quit**.
+See [guided training stabilization](docs/GUIDED_TRAINING_STABILIZATION.md) for
+runtime checks, recovery behavior and headset acceptance evidence.
+
+Popup messages now wrap within their backgrounds. The transfer manager exposes
+live popup offsets and instruction scale under **CNA / Training / Popups**. See
+[editor popup tuning](Tools/UI_Testing.md) for saving tuned positions before packaging.

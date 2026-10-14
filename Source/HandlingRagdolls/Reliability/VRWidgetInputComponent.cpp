@@ -152,6 +152,7 @@ UVRWidgetInputComponent::UVRWidgetInputComponent()
 void UVRWidgetInputComponent::BeginPlay()
 {
     Super::BeginPlay();
+    UCNAReliabilityLibrary::EnsureTrainingFade(GetOwner());
     DeactivateHandle = FCoreDelegates::ApplicationWillDeactivateDelegate.AddUObject(this, &UVRWidgetInputComponent::Suspend);
     BackgroundHandle = FCoreDelegates::ApplicationWillEnterBackgroundDelegate.AddUObject(this, &UVRWidgetInputComponent::Suspend);
     ReactivateHandle = FCoreDelegates::ApplicationHasReactivatedDelegate.AddUObject(this, &UVRWidgetInputComponent::Resume);

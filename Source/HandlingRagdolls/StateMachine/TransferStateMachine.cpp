@@ -82,7 +82,7 @@ void UTransferStateMachine::TickComponent(float DeltaTime, ELevelTick TickType, 
 
 void UTransferStateMachine::StartTask()
 {
-	if (bIsRunning) return;
+	if (bIsRunning || CurrentStateType == ETransferState::Complete || CurrentStateType == ETransferState::Failed) return;
 
 	// Validate that essential references are set
 	if (!PatientActor)
@@ -91,6 +91,7 @@ void UTransferStateMachine::StartTask()
 		return;
 	}
 
+    InitializeStates();
 	bIsRunning = true;
 	ElapsedTime = 0.0f;
 
@@ -130,6 +131,7 @@ void UTransferStateMachine::Reset()
 	CurrentStateType = ETransferState::Idle;
 	ElapsedTime = 0.0f;
 	bIsRunning = false;
+    RewardedStates.Empty();
 
 	if (Scoring)
 	{
@@ -148,47 +150,43 @@ FText UTransferStateMachine::GetCurrentInstructions() const
 
 void UTransferStateMachine::TransitionToState(ETransferState NewState)
 {
-	ETransferState OldState = CurrentStateType;
+    if (bTransitioning || (CurrentState && CurrentStateType == NewState)
+        || CurrentStateType == ETransferState::Complete || CurrentStateType == ETransferState::Failed) return;
+    TObjectPtr<UTransferTaskState>* Found = States.Find(NewState);
+    if ((!Found || !*Found) && NewState != ETransferState::Failed) return;
+    TGuardValue<bool> Guard(bTransitioning, true);
+    const ETransferState Old = CurrentStateType;
+    if (CurrentState) CurrentState->ExitState();
+    CurrentStateType = NewState;
+    CurrentState = Found ? *Found : nullptr;
+    if (CurrentState) CurrentState->EnterState(this);
+    if (Scoring && NewState != ETransferState::Failed && Old != ETransferState::Idle && !RewardedStates.Contains(NewState))
+    {
+        RewardedStates.Add(NewState);
+        Scoring->AddReward(10.f, FText::FromString(TEXT("Step completed correctly")));
+    }
+    const bool bTerminal = NewState == ETransferState::Complete || NewState == ETransferState::Failed;
+    if (bTerminal) bIsRunning = false;
+    if (NewState == ETransferState::Complete && Scoring) Scoring->SetCompletionTime(ElapsedTime);
+    OnTransferStateChanged.Broadcast(Old, NewState);
+    if (NewState == ETransferState::Complete) OnTransferCompleted.Broadcast();
+    else if (NewState == ETransferState::Failed) OnTransferFailed.Broadcast(FText::FromString(TEXT("Patient spine was injured during transfer.")));
+}
 
-	// Exit current state
-	if (CurrentState)
-	{
-		CurrentState->ExitState();
-	}
-
-	// Find and enter new state
-	TObjectPtr<UTransferTaskState>* FoundState = States.Find(NewState);
-	if (FoundState && *FoundState)
-	{
-		CurrentState = *FoundState;
-		CurrentStateType = NewState;
-		CurrentState->EnterState(this);
-	}
-
-	// Broadcast state change
-	OnTransferStateChanged.Broadcast(OldState, NewState);
-
-	// Handle terminal states
-	if (NewState == ETransferState::Complete)
-	{
-		bIsRunning = false;
-		if (Scoring)
-		{
-			Scoring->SetCompletionTime(ElapsedTime);
-		}
-		OnTransferCompleted.Broadcast();
-	}
-	else if (NewState == ETransferState::Failed)
-	{
-		bIsRunning = false;
-		OnTransferFailed.Broadcast(FText::FromString(TEXT("Patient spine was injured during transfer.")));
-	}
-
-	// Reward for proper step completion
-	if (Scoring && NewState != ETransferState::Failed && OldState != ETransferState::Idle)
-	{
-		Scoring->AddReward(10.0f, FText::FromString(TEXT("Step completed correctly")));
-	}
+bool UTransferStateMachine::RetryBeltLift()
+{
+    if (!bIsRunning || bTransitioning || (CurrentStateType != ETransferState::BeltLift
+        && CurrentStateType != ETransferState::WheelchairTransfer)) return false;
+    TObjectPtr<UTransferTaskState>* Lift = States.Find(ETransferState::BeltLift);
+    if (!Lift || !*Lift) return false;
+    TGuardValue<bool> Guard(bTransitioning, true);
+    const ETransferState Old = CurrentStateType;
+    if (CurrentState) CurrentState->ExitState();
+    CurrentState = *Lift;
+    CurrentStateType = ETransferState::BeltLift;
+    CurrentState->EnterState(this);
+    OnTransferStateChanged.Broadcast(Old, CurrentStateType);
+    return true;
 }
 
 void UTransferStateMachine::InitializeStates()
