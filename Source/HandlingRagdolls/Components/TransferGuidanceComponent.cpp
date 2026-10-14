@@ -33,6 +33,8 @@ UTransferGuidanceComponent::UTransferGuidanceComponent()
     static ConstructorHelpers::FObjectFinder<UStaticMesh> Sphere(TEXT("/Engine/BasicShapes/Sphere"));
     static ConstructorHelpers::FObjectFinder<UStaticMesh> Cylinder(TEXT("/Engine/BasicShapes/Cylinder"));
     static ConstructorHelpers::FObjectFinder<UStaticMesh> Cone(TEXT("/Engine/BasicShapes/Cone"));
+    static ConstructorHelpers::FObjectFinder<UMaterialInterface> OutlinedText(TEXT("/Game/PatientSetup/Guidance/M_TrainingTextOutline"));
+    TextOutlineMaterial = OutlinedText.Object;
     GhostMaterial = Material.Object;
     ChairPose = Seated.Object;
     SphereMesh = Sphere.Object; CylinderMesh = Cylinder.Object; ConeMesh = Cone.Object;
@@ -160,7 +162,6 @@ void UTransferGuidanceComponent::RefreshHints()
     else
     {
         AWheelchairActor* Chair = StateMachine->GetGuidanceWheelchair();
-        if (!IsValid(Chair) || !Chair->IsReadyToReceive()) Chair = StateMachine->GetWheelchair();
         if (!IsValid(Chair) || !Chair->IsReadyToReceive())
         {
             Chair = nullptr;
@@ -243,6 +244,7 @@ void UTransferGuidanceComponent::CreateVisuals()
     Label = NewObject<UTextRenderComponent>(GetOwner()); Setup(Label);
     Label->SetHorizontalAlignment(EHTA_Center); Label->SetVerticalAlignment(EVRTA_TextCenter);
     Label->SetWorldSize(VisualSettings.TextSize);
+    if (TextOutlineMaterial) Label->SetTextMaterial(TextOutlineMaterial);
 }
 
 void UTransferGuidanceComponent::HideVisuals()
@@ -276,6 +278,7 @@ void UTransferGuidanceComponent::UpdateVisuals()
     const bool bReady = Step == ETransferHintStep::ReleaseToSeat;
     const FLinearColor Color = bReady ? VisualSettings.ReadyColor : VisualSettings.HintColor;
     GhostMID->SetVectorParameterValue(TEXT("Tint"), Color);
+    GhostMID->SetScalarParameterValue(TEXT("Opacity"), VisualSettings.GhostOpacity);
     const float Cycle = FMath::Fmod(LoopElapsed / FMath::Max(.5f, VisualSettings.LoopDuration), 1.f);
     const float Pulse = .85f + .15f * FMath::Sin(Cycle * 2.f * PI);
     Target->SetWorldLocation(Position); Target->SetWorldScale3D(FVector(bChair ? .75f : .16f) * Pulse);
@@ -334,8 +337,17 @@ void UTransferGuidanceComponent::UpdateVisuals()
         SeatedGhost->SetVisibility(true);
     }
     Label->SetText(GetHintText()); Label->SetTextRenderColor(Color.ToFColor(true));
-    Label->SetWorldLocation(Position + (bChair ? VisualSettings.ChairLabelOffset : VisualSettings.LabelOffset));
     APlayerCameraManager* Camera = UGameplayStatics::GetPlayerCameraManager(this, 0);
+    FVector LabelPosition = Position + (bChair ? VisualSettings.ChairLabelOffset : VisualSettings.LabelOffset);
+    if (Step == ETransferHintStep::GrabBeltHandle)
+    {
+        FVector TowardViewer = Camera ? (Camera->GetCameraLocation() - Position).GetSafeNormal2D() : Anchor.GetRotation().GetForwardVector().GetSafeNormal2D();
+        if (TowardViewer.IsNearlyZero()) TowardViewer = FVector::ForwardVector;
+        const FVector Right = FVector::CrossProduct(TowardViewer, FVector::UpVector);
+        const FVector Offset = VisualSettings.BeltHandleLabelOffset;
+        LabelPosition = Position + TowardViewer * Offset.X + Right * Offset.Y + FVector::UpVector * Offset.Z;
+    }
+    Label->SetWorldLocation(LabelPosition);
     if (Camera) Label->SetWorldRotation((Camera->GetCameraLocation() - Label->GetComponentLocation()).Rotation());
     Label->SetVisibility(true);
 }

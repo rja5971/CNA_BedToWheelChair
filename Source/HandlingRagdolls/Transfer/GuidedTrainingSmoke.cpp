@@ -16,6 +16,12 @@
 #include "../StateMachine/TransferStateMachine.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Components/SceneComponent.h"
+#include "Components/TimelineComponent.h"
+#include "Curves/CurveFloat.h"
+#include "Components/WidgetComponent.h"
+#include "Components/Border.h"
+#include "Blueprint/UserWidget.h"
+#include "Blueprint/WidgetTree.h"
 #include "PhysicsEngine/BodyInstance.h"
 #include "EngineUtils.h"
 #include "TimerManager.h"
@@ -177,6 +183,20 @@ struct FGuidedTransferSmoke : TSharedFromThis<FGuidedTransferSmoke>
             Check(!Grab(0), TEXT("Completed belt denies further grabs"));
             Move(0, Patient->GetPatientMesh()->GetBoneLocation(TEXT("head")));
             Check(!Hands[0]->TryGrabRagdoll(), TEXT("Completed patient denies further grabs"));
+            TArray<UWidgetComponent*> Panels; Manager->GetComponents(Panels);
+            UBorder* ResultBorder = nullptr;
+            UWidgetComponent* ResultPanel = nullptr;
+            for (UWidgetComponent* Panel : Panels)
+                if (Panel->GetFName() == TEXT("TrainingStatus"))
+                {
+                    ResultPanel = Panel;
+                    if (UUserWidget* Widget = Panel->GetUserWidgetObject())
+                        if (Widget->WidgetTree) ResultBorder = Cast<UBorder>(Widget->WidgetTree->FindWidget(TEXT("Border_102")));
+                }
+            Check(ResultBorder && ResultBorder->GetPadding().Bottom >= ResultBorder->GetPadding().Top + Manager->ResultPopupExtraBottomPadding,
+                TEXT("Final native result panel reserves additional bottom padding"));
+            Check(ResultPanel && ResultPanel->GetDrawSize().Y >= 600,
+                TEXT("Final result surface grows to fit long scores and bottom padding"));
             Next(8);
         }
         else if (Stage == 8 && Age > 1.f)
@@ -194,17 +214,30 @@ static FAutoConsoleCommandWithWorld GuidedMovementSmoke(TEXT("cna.Guided.TestMov
         APawn* Pawn = UGameplayStatics::GetPlayerPawn(World, 0);
         if (!Pawn) return;
         const FVector Before = Pawn->GetActorLocation();
+        const FRotator BeforeRotation = Pawn->GetActorRotation();
         const FVector View = UCNAReliabilityLibrary::TrainingViewLocation(Pawn);
+        ATransferManagerActor* Manager = UCNAReliabilityLibrary::GuidedManager(Pawn);
+        FVector Center;
+        if (!Manager || !Manager->IsLessonBoundaryActive() || !Manager->IsTrainingMovementAllowed() || !Manager->GetLessonMovementCenter(Center))
+        { UE_LOG(LogTemp, Error, TEXT("GUIDED_MOVEMENT RESULT: FAIL (lesson boundary is not ready)")); return; }
+        FVector Front;
+        const FVector Outward = (View - Center).GetSafeNormal2D();
+        const bool bAtEdge = FMath::Abs(FVector::Dist2D(View, Center) - Manager->TrainingMovementRadiusMeters * 100.f) < .1f;
+        const USceneComponent* Camera = Cast<USceneComponent>(UCNAReliabilityLibrary::ObjectProperty(Pawn, TEXT("Camera")));
+        const bool bFrontFacing = Manager->GetLessonMovementFront(Front) && FVector::DotProduct(Outward, Front) > 0.f
+            && Camera && FVector::DotProduct(Camera->GetForwardVector().GetSafeNormal2D(), -Outward) > .99f;
+        const bool bBackwardBlocked = Manager->ClampTrainingMovementDelta(Pawn, Outward * 20.f).Size() < .02f;
+        const bool bForwardAllowed = Manager->ClampTrainingMovementDelta(Pawn, -Outward * 20.f).Size() > 19.9f;
         FBoolProperty* Valid = FindFProperty<FBoolProperty>(Pawn->GetClass(), TEXT("bValidTeleportLocation"));
         FStructProperty* Target = FindFProperty<FStructProperty>(Pawn->GetClass(), TEXT("ProjectedTeleportLocation"));
         if (!Valid || !Target) { UE_LOG(LogTemp, Error, TEXT("GUIDED_MOVEMENT RESULT: FAIL (missing verified properties)")); return; }
         FVector* Location = Target->ContainerPtrToValuePtr<FVector>(Pawn);
-        // Seed the area's origin before testing a distant destination.
+        // Verify the current tracked view is inside the panel-centred circle.
         const bool bInside = UCNAReliabilityLibrary::ValidateTrainingTeleportLocation(Pawn, true, View);
-        *Location = View + FVector(1000, 0, 0); Valid->SetPropertyValue_InContainer(Pawn, true);
+        *Location = Center + FVector(Manager->TrainingMovementRadiusMeters * 100.f + 100.f, 0, 0); Valid->SetPropertyValue_InContainer(Pawn, true);
         UCNAReliabilityLibrary::CallNoArgs(Pawn, TEXT("TryTeleport"));
         const bool bOutsideRejected = Pawn->GetActorLocation().Equals(Before, .01f);
-        *Location = View + FVector(20, 0, 0); Location->Z = Before.Z;
+        *Location = Center + (View - Center).GetSafeNormal2D() * (Manager->TrainingMovementRadiusMeters * 50.f); Location->Z = Before.Z;
         Valid->SetPropertyValue_InContainer(Pawn, true);
         UCNAReliabilityLibrary::CallNoArgs(Pawn, TEXT("TryTeleport"));
         const bool bInsideAccepted = !Pawn->GetActorLocation().Equals(Before, .01f);
@@ -221,8 +254,52 @@ static FAutoConsoleCommandWithWorld GuidedMovementSmoke(TEXT("cna.Guided.TestMov
         Pawn->SetActorRotation(Rotation, ETeleportType::TeleportPhysics);
         Pawn->SetActorLocation(Before, false, nullptr, ETeleportType::TeleportPhysics);
         Valid->SetPropertyValue_InContainer(Pawn, false);
-        UE_LOG(LogTemp, Display, TEXT("GUIDED_MOVEMENT RESULT: %s (inside=%d outside=%d teleport=%d turn=%d)"),
-            bInside && bOutsideRejected && bInsideAccepted && bTurnAccepted ? TEXT("PASS") : TEXT("FAIL"), bInside, bOutsideRejected, bInsideAccepted, bTurnAccepted);
+        Pawn->SetActorLocation(Before + FVector(Manager->TrainingMovementRadiusMeters * 100.f + 1000.f, 0, 0), false, nullptr, ETeleportType::TeleportPhysics);
+        const bool bArrivalCorrected = Manager->CorrectLessonArrival() && Manager->IsTrainingLocationAllowed(UCNAReliabilityLibrary::TrainingViewLocation(Pawn));
+        Pawn->SetActorRotation(BeforeRotation, ETeleportType::TeleportPhysics);
+        Pawn->SetActorLocation(Before, false, nullptr, ETeleportType::TeleportPhysics);
+        UE_LOG(LogTemp, Display, TEXT("GUIDED_MOVEMENT RESULT: %s (inside=%d outside=%d teleport=%d turn=%d arrival=%d edge=%d front=%d backwardBlocked=%d forwardAllowed=%d)"),
+            bInside && bOutsideRejected && bInsideAccepted && bTurnAccepted && bArrivalCorrected
+                && bAtEdge && bFrontFacing && bBackwardBlocked && bForwardAllowed ? TEXT("PASS") : TEXT("FAIL"),
+            bInside, bOutsideRejected, bInsideAccepted, bTurnAccepted, bArrivalCorrected,
+            bAtEdge, bFrontFacing, bBackwardBlocked, bForwardAllowed);
+    }));
+static FAutoConsoleCommandWithWorldAndArgs GuidedArrivalStage(TEXT("cna.Guided.TestArrivalStage"),
+    TEXT("Development-only focused arrival check: stages 2, 6, 7."),
+    FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World)
+    {
+        if (Args.Num() != 1) return;
+        ATransferManagerActor* Manager = UCNAReliabilityLibrary::GuidedManager(UGameplayStatics::GetPlayerPawn(World, 0));
+        if (!Manager) return;
+        const int32 Stage = FCString::Atoi(*Args[0]);
+        if (Stage != 2 && Stage != 6 && Stage != 7) return;
+        if (Stage == 7)
+        {
+            AActor* Quiz = nullptr;
+            AActor* Video = nullptr;
+            for (TActorIterator<AActor> It(World); It; ++It)
+            {
+                if (It->GetClass()->GetFName() == TEXT("BP_QuizActor_C")) Quiz = *It;
+                if (It->GetFName() == TEXT("BP_MediaDisplay_C_0")) Video = *It;
+            }
+            if (!Quiz || !Video) return;
+            Quiz->SetActorLocationAndRotation(Video->GetActorLocation(), Video->GetActorQuat());
+        }
+        Manager->SetTrainingStage(static_cast<EGuidedTrainingStage>(Stage));
+    }));
+static FAutoConsoleCommandWithWorld GuidedFadeInspect(TEXT("cna.Guided.InspectFade"),
+    TEXT("Inspect the actual pawn fade timeline and opacity curve."),
+    FConsoleCommandWithWorldDelegate::CreateLambda([](UWorld* World)
+    {
+        APawn* Pawn = UGameplayStatics::GetPlayerPawn(World, 0);
+        UTimelineComponent* Timeline = Pawn ? Cast<UTimelineComponent>(UCNAReliabilityLibrary::ObjectProperty(Pawn, TEXT("FadeTimeline"))) : nullptr;
+        if (!Timeline) return;
+        UE_LOG(LogTemp, Display, TEXT("FADE_CURVE: length=%f looping=%d"), Timeline->GetTimelineLength(), Timeline->IsLooping());
+        TSet<UCurveBase*> Curves; Timeline->GetAllCurves(Curves);
+        for (UCurveBase* Base : Curves)
+            if (UCurveFloat* Curve = Cast<UCurveFloat>(Base))
+                for (const FRichCurveKey& Key : Curve->FloatCurve.GetConstRefOfKeys())
+                    UE_LOG(LogTemp, Display, TEXT("FADE_CURVE: %s time=%f opacity=%f"), *Curve->GetName(), Key.Time, Key.Value);
     }));
 static FAutoConsoleCommandWithWorld GuidedTransferSmoke(TEXT("cna.Guided.SmokeTransfer"),
     TEXT("Validate the real guided transfer after the lesson quiz, including repeated bed retries and completion."),

@@ -18,7 +18,7 @@ def tick(dt):
             quiz = actors[0].get_editor_property('QuizPanel').get_user_widget_object()
             quiz.call_method('BndEvt__WBP_QuizPanel_Option2Button_K2Node_ComponentBoundEvent_1_OnButtonClickedEvent__DelegateSignature')
             phase = 1
-        elif phase == 1 and manager.get_training_stage() == unreal.GuidedTrainingStage.BATHROOM_VIDEO:
+        elif phase == 1 and manager.get_training_stage() == unreal.GuidedTrainingStage.BATHROOM_VIDEO and unreal.CNAReliabilityLibrary.is_training_movement_allowed(manager):
             unreal.unregister_slate_post_tick_callback(handle)
             unreal.SystemLibrary.execute_console_command(world, 'cna.Media.SmokeOpenFailure')
             phase = 2

@@ -92,3 +92,7 @@ ehthumbs.db
 !README.md
 docs/
 devlog.md
+
+# Generated Python caches
+__pycache__/
+*.py[cod]

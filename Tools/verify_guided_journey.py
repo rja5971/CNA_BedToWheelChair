@@ -60,7 +60,16 @@ def tick(delta):
         if not quiz: return
         stage = manager.get_training_stage()
         stages = unreal.GuidedTrainingStage
-        if stage in (stages.BATHROOM_VIDEO, stages.TRANSFER_VIDEO, stages.PATIENT_QUIZ) and stage not in movement_stages_checked:
+        if stage in (stages.BATHROOM_VIDEO, stages.TRANSFER_VIDEO, stages.PATIENT_QUIZ) and stage not in movement_stages_checked and manager.is_lesson_boundary_active() and unreal.CNAReliabilityLibrary.is_training_movement_allowed(manager):
+            if stage == stages.PATIENT_QUIZ:
+                pawn = unreal.GameplayStatics.get_player_pawn(world, 0)
+                view = pawn.get_editor_property('Camera').get_world_location()
+                centre = quiz_panel.get_world_location()
+                front = quiz_panel.get_forward_vector()
+                assert (view.x-centre.x)*front.x + (view.y-centre.y)*front.y > 0, 'Patient quiz arrival is behind the panel'
+                look = pawn.get_editor_property('Camera').get_forward_vector()
+                assert (centre.x-view.x)*look.x + (centre.y-view.y)*look.y > 0, 'Patient quiz arrival faces away from the panel'
+                log('PASS: patient quiz arrival is in front of the panel and faces the quiz')
             assert unreal.CNAReliabilityLibrary.is_training_movement_allowed(manager)
             unreal.SystemLibrary.execute_console_command(world, 'cna.Guided.TestMovement')
             movement_stages_checked.add(stage)
@@ -73,6 +82,7 @@ def tick(delta):
         ok = 'BndEvt__WBP_WrongAnswerPopup_OKButton_K2Node_ComponentBoundEvent_0_OnButtonClickedEvent__DelegateSignature'
         if phase == 1:
             if stage != stages.ENTRY_QUIZ: return
+            if not quiz_panel.is_visible() or not unreal.CNAReliabilityLibrary.is_training_movement_allowed(manager): return
             assert manager.get_editor_property('bGuidedTraining')
             assert not chat_actor.get_editor_property('bShowConversationForUITesting')
             assert not chat_panel.is_visible() and chat_panel.get_collision_enabled() == unreal.CollisionEnabled.NO_COLLISION
@@ -83,10 +93,12 @@ def tick(delta):
             assert pawn.get_actor_location().equals(before)
             click(quiz, q1)
             assert quiz.get_editor_property('CurrentQuestionIndex') == 0 and wrong.is_visible()
+            assert not manager.is_lesson_boundary_active(), 'Wrong-answer popup must suspend the lesson boundary'
             click(quiz, q2)
             assert quiz.get_editor_property('CurrentQuestionIndex') == 0
             click(wrong.get_user_widget_object(), ok)
             assert not wrong.is_visible() and quiz_panel.is_visible()
+            assert manager.is_lesson_boundary_active()
             click(quiz, q2); click(quiz, q2)
             assert quiz.get_editor_property('CurrentQuestionIndex') == 1
             assert manager.get_training_stage() == stages.BATHROOM_TRANSITION
@@ -99,6 +111,7 @@ def tick(delta):
             log('PASS: complete bathroom video and one-shot Continue callback')
             phase = 3
         elif phase == 3 and stage == stages.CONVERSATION:
+            assert not manager.is_lesson_boundary_active()
             assert chat_panel.is_visible() and not quiz_panel.is_visible()
             next_button = 'BndEvt__WBP_PatientChat_Button_422_K2Node_ComponentBoundEvent_3_OnButtonClickedEvent__DelegateSignature'
             response = 'BndEvt__WBP_PatientChat_PatientInteractButton_K2Node_ComponentBoundEvent_0_OnButtonClickedEvent__DelegateSignature'
@@ -113,6 +126,7 @@ def tick(delta):
             log('PASS: room transition, conversation prerequisite, response without premature video and one-shot Next')
             phase = 4
         elif phase == 4 and stage == stages.PATIENT_QUIZ:
+            if not quiz_panel.is_visible() or not unreal.CNAReliabilityLibrary.is_training_movement_allowed(manager): return
             assert quiz_panel.is_visible() and quiz.get_editor_property('CurrentQuestionIndex') == 1
             assert 'head/neck' in str(quiz.get_editor_property('TextBlock_OP2').get_text())
             click(quiz, q1)

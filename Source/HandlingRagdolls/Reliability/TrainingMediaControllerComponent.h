@@ -23,6 +23,8 @@ public:
 	FTrainingPlaybackSession::EState GetPlaybackState() const { return Session.State; }
 
 private:
+    friend class FCNAGuidedTrainingTest;
+    friend class FCNAEmptyCaptionTest;
 	UPROPERTY() TObjectPtr<UMediaPlayer> Player;
 	UPROPERTY() TObjectPtr<UMediaSource> Source;
 	UPROPERTY() TObjectPtr<AActor> ActiveDisplay;
@@ -36,6 +38,7 @@ private:
 	FString ExpectedUrl;
 	bool bEndingPlay = false;
 	bool bApplicationSuspended = false;
+    bool bLessonRecoveryPending = false;
 	FDelegateHandle BackgroundHandle;
 	FDelegateHandle ForegroundHandle;
 	void BeginAttempt(bool bNewRequest);

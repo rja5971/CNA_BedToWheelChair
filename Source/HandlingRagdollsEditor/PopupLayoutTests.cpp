@@ -26,6 +26,7 @@ bool FCNAPopupReadabilityTest::RunTest(const FString& Parameters)
         {TEXT("Instruction"), TEXT("WBP_MediaText"), FVector2D(1200, 360), TEXT("Rotate the patient to face away from the wheelchair, then lower them into the seat.")},
         {TEXT("Retry"), TEXT("WBP_MediaText"), FVector2D(1200, 360), TEXT("Try again - grab the belt handles and lift slowly.")},
         {TEXT("Error"), TEXT("WBP_MediaText"), FVector2D(1200, 360), TEXT("Cannot restore a safe seated checkpoint. Stop this attempt and use the recovery menu.")},
+        {TEXT("FinalResult"), TEXT("WBP_MediaText"), FVector2D(1200, 600), TEXT("Transfer Complete!\nScore: 68%\nGrade: C\nTime taken: 123 seconds\nResult: Failed - Score below threshold")},
         {TEXT("VideoStatus"), TEXT("WBP_MediaText"), FVector2D(1918, 600), TEXT("Transfers From Bed To Wheelchair Using Transfer Belt")},
         {TEXT("WrongAnswer"), TEXT("WBP_WrongAnswerPopup"), FVector2D(1920, 1080), nullptr},
         {TEXT("Continue"), TEXT("WBP_CompletionPanel"), FVector2D(500, 500), nullptr},
@@ -40,6 +41,11 @@ bool FCNAPopupReadabilityTest::RunTest(const FString& Parameters)
         UClass* Class = LoadClass<UUserWidget>(nullptr, *Asset);
         UUserWidget* Widget = Class ? CreateWidget<UUserWidget>(Instance, Class) : nullptr;
         if (!TestNotNull(Case.Name, Widget)) continue;
+        Widget->WidgetTree->ForEachWidget([this](UWidget* Child)
+        {
+            if (const UTextBlock* Text = Cast<UTextBlock>(Child))
+                TestEqual(TEXT("Popup and button text has no outline"), Text->GetFont().OutlineSettings.OutlineSize, 0);
+        });
         if (Case.Message)
         {
             UFunction* Set = Widget->FindFunction(TEXT("SetDisplayText"));
@@ -47,6 +53,21 @@ bool FCNAPopupReadabilityTest::RunTest(const FString& Parameters)
             FStructOnScope Params(Set);
             FindFProperty<FTextProperty>(Set, TEXT("InText"))->SetPropertyValue_InContainer(Params.GetStructMemory(), FText::FromString(Case.Message));
             Widget->ProcessEvent(Set, Params.GetStructMemory());
+        }
+        if (FString(Case.Name) == TEXT("FinalResult"))
+        {
+            Widget->WidgetTree->ForEachWidget([](UWidget* Child)
+            {
+                if (UTextBlock* Text = Cast<UTextBlock>(Child))
+                {
+                    FSlateFontInfo Font = Text->GetFont(); Font.Size = 44; Font.TypefaceFontName = TEXT("Bold");
+                    Text->SetFont(Font);
+                }
+            });
+            if (UBorder* Border = Cast<UBorder>(Widget->WidgetTree->FindWidget(TEXT("Border_102"))))
+            {
+                FMargin Padding = Border->GetPadding(); Padding.Bottom += 24.f; Border->SetPadding(Padding);
+            }
         }
         const TSharedRef<SWidget> Slate = Widget->TakeWidget();
         UTextureRenderTarget2D* Target = Renderer.DrawWidget(Slate, Case.Size);

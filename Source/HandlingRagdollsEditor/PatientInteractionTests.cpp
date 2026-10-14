@@ -217,11 +217,17 @@ bool FCNATransferGuidanceTest::RunTest(const FString& Parameters)
     TestTrue(TEXT("Real belt attachment succeeds"), Belt->GetBeltComponent()->AttachToPatient(Patient));
     Check(TEXT("Attached belt exposes front handle"), ETransferHintStep::GrabBeltHandle);
     TestEqual(TEXT("Handle visual uses authoritative front location"), Hints->Target->GetComponentLocation(), Belt->GetHandleWorldLocation());
+    TestTrue(TEXT("Floating handle text sits forty centimetres away from the belt"),
+        FMath::IsNearlyEqual(FVector::Dist2D(Hints->Label->GetComponentLocation(), Belt->GetHandleWorldLocation()), 40.f, .1f));
+    Hints->VisualSettings.BeltHandleLabelOffset = FVector(65, 0, 30); Hints->UpdateVisuals(); Hints->UpdateVisuals();
+    TestTrue(TEXT("Live handle text offset updates without moving interaction target or accumulating"),
+        FMath::IsNearlyEqual(FVector::Dist2D(Hints->Label->GetComponentLocation(), Belt->GetHandleWorldLocation()), 65.f, .1f)
+        && Hints->Target->GetComponentLocation().Equals(Belt->GetHandleWorldLocation(), .1f));
     Belt->GetBeltComponent()->OnHandleGrabbed(Grab, TEXT("BeltHandle_Front"), Belt->GetHandleWorldLocation());
     Check(TEXT("Acquired handle starts lift guidance"), ETransferHintStep::LiftAndCarry);
     TestEqual(TEXT("Before latching, configured ready chair is selected"), Hints->GetSelectedWheelchair(), Chair);
     AWheelchairActor* Alternative = World->SpawnActor<AWheelchairActor>(); Alternative->LockBrakes(); Alternative->SetActorLocation(FVector(150,0,0));
-    Hints->RefreshHints(); TestEqual(TEXT("Configured chair preferred to nearer chair before latch"), Hints->GetSelectedWheelchair(), Chair);
+    Hints->RefreshHints(); TestEqual(TEXT("Nearest ready chair selected before approach"), Hints->GetSelectedWheelchair(), Alternative);
     Chair->UnlockBrakes(); Hints->RefreshHints();
     TestEqual(TEXT("Unavailable configured chair falls back to nearest ready chair"), Hints->GetSelectedWheelchair(), Alternative);
     Alternative->OnTransferComplete(Patient); Hints->RefreshHints();
@@ -232,6 +238,8 @@ bool FCNATransferGuidanceTest::RunTest(const FString& Parameters)
     State->ForceState(ETransferState::WheelchairTransfer);
     Patient->SetInteractionPhase(EPatientInteractionPhase::BeltTransfer);
     Check(TEXT("Carry state guides toward seat"), ETransferHintStep::MoveToSeat);
+    TestEqual(TEXT("Hint already targets the chair that will receive the patient"), Hints->GetSelectedWheelchair(), Alternative);
+    TestTrue(TEXT("Cyan ghost is centred before entering the chair zone"), Hints->SeatedGhost->GetSocketLocation(Patient->GetPelvisBoneName()).Equals(Alternative->GetTargetSeatTransform().GetLocation(), .1f));
     // Exercise selection through the real state's approach-zone latch.
     const FVector Seat = Alternative->GetTargetSeatTransform().GetLocation();
     Patient->GetPatientMesh()->SetAllBodiesSimulatePhysics(false); Patient->GetPatientMesh()->RefreshBoneTransforms();

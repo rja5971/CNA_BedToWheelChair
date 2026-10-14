@@ -3,10 +3,17 @@
 #include "../Patient/PatientActor.h"
 #include "../StateMachine/TransferStateMachine.h"
 #include "../Components/ScoringComponent.h"
+#include "../Reliability/CNAReliabilityLibrary.h"
+#include "../Reliability/TrainingMediaControllerComponent.h"
 #include "Engine/World.h"
 #include "GameFramework/Pawn.h"
 #include "Components/SceneComponent.h"
 #include "Components/WidgetComponent.h"
+#include "Components/Border.h"
+#include "Blueprint/UserWidget.h"
+#include "Blueprint/WidgetTree.h"
+#include "Engine/GameInstance.h"
+#include "Engine/Engine.h"
 #include "Misc/AutomationTest.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -44,7 +51,13 @@ bool FCNAGuidedTrainingTest::RunTest(const FString& Parameters)
     TestFalse(TEXT("Entry quiz locks patient"), Patient->IsGrabInteractionEnabled());
     TestFalse(TEXT("Entry quiz locks loose belt"), Belt->IsGrabInteractionEnabled());
     TestTrue(TEXT("Entry quiz permits movement and turning"), Manager->IsTrainingMovementAllowed());
-    Manager->MovementOrigin = FVector::ZeroVector; Manager->bMovementOriginValid = true;
+    TestEqual(TEXT("Default movement radius is two metres"), Manager->TrainingMovementRadiusMeters, 2.f);
+    UClass* QuizClass = LoadClass<AActor>(nullptr, TEXT("/Game/Project/Blueprints/Actors/BP_QuizActor.BP_QuizActor_C"));
+    Manager->QuizActor = QuizClass ? World->SpawnActor<AActor>(QuizClass) : nullptr;
+    UWidgetComponent* QuizPanel = Cast<UWidgetComponent>(UCNAReliabilityLibrary::ObjectProperty(Manager->QuizActor, TEXT("QuizPanel")));
+    if (!TestNotNull(TEXT("Actual quiz anchor"), QuizPanel)) { World->DestroyWorld(false); return false; }
+    QuizPanel->SetWorldLocation(FVector::ZeroVector);
+    Manager->TrainingMovementRadiusMeters = 5.f;
     TestTrue(TEXT("Five metre boundary accepted"), Manager->IsTrainingLocationAllowed(FVector(500, 0, 200)));
     TestFalse(TEXT("Destination beyond five metres rejected"), Manager->IsTrainingLocationAllowed(FVector(500.1, 0, 0)));
     TestFalse(TEXT("Diagonal distance cannot bypass radius"), Manager->IsTrainingLocationAllowed(FVector(400, 400, 0)));
@@ -52,21 +65,49 @@ bool FCNAGuidedTrainingTest::RunTest(const FString& Parameters)
     TestFalse(TEXT("Editor-adjusted radius applied immediately"), Manager->IsTrainingLocationAllowed(FVector(201, 0, 0)));
     APawn* Pawn = World->SpawnActor<APawn>();
     USceneComponent* Root = NewObject<USceneComponent>(Pawn); Pawn->SetRootComponent(Root); Pawn->AddInstanceComponent(Root); Root->RegisterComponent();
+    const FVector Pelvis = Patient->GetPelvisLocation();
+    Pawn->SetActorLocation(Pelvis - FVector(100, 0, 0));
+    TestTrue(TEXT("Carry popup sits beside the moving patient"), Manager->CarryStatusLocation(Pawn).Equals(Pelvis + FVector(0, 85, 65), .01f));
+    Pawn->SetActorLocation(Pelvis + FVector(100, 0, 0));
+    TestTrue(TEXT("Carry offset follows viewer orientation without entering patient"), Manager->CarryStatusLocation(Pawn).Equals(Pelvis + FVector(0, -85, 65), .01f));
     Pawn->SetActorLocation(FVector(190, 0, 0));
     TestTrue(TEXT("Smooth move clipped at boundary"), Manager->ClampTrainingMovementDelta(Pawn, FVector(40, 0, 0)).Equals(FVector(10, 0, 0), .01f));
     Pawn->SetActorLocation(FVector(210, 0, 0));
     TestTrue(TEXT("Physical tracking outside boundary may move inward"), Manager->ClampTrainingMovementDelta(Pawn, FVector(-5, 0, 0)).Equals(FVector(-5, 0, 0)));
     TestTrue(TEXT("Outward movement from outside boundary blocked"), Manager->ClampTrainingMovementDelta(Pawn, FVector(5, 0, 0)).IsZero());
+    QuizPanel->SetWorldLocation(FVector(1000, 2000, 120));
+    TestTrue(TEXT("Circle follows quiz panel, not player arrival"), Manager->IsTrainingLocationAllowed(FVector(1000, 2000, 0)));
+    TestFalse(TEXT("Previous player-centred area no longer accepted"), Manager->IsTrainingLocationAllowed(FVector::ZeroVector));
+    Manager->bWrongAnswerOpen = true;
+    TestFalse(TEXT("Wrong answer popup suspends lesson boundary"), Manager->IsLessonBoundaryActive());
+    TestTrue(TEXT("Wrong answer popup permits distant teleport"), Manager->IsTrainingLocationAllowed(FVector(9000, 9000, 0)));
+    TestEqual(TEXT("Wrong answer popup permits full smooth movement"), Manager->ClampTrainingMovementDelta(Pawn, FVector(40, 0, 0)), FVector(40, 0, 0));
+    Manager->bWrongAnswerOpen = false;
+    TestTrue(TEXT("Dismissed popup restores quiz boundary"), Manager->IsLessonBoundaryActive());
+    Manager->bShowAllowedWalkHologram = false;
+    TestTrue(TEXT("Hologram toggle does not disable radius enforcement"), Manager->IsLessonBoundaryActive());
+    TestNotNull(TEXT("Floor material is a cookable manager asset reference"), Manager->WalkHologramMaterial.Get());
     Manager->TrainingMovementRadiusMeters = 5.f;
     Manager->SetTrainingStage(EGuidedTrainingStage::BathroomTransition);
     TestFalse(TEXT("Room fade transition still blocks movement"), Manager->IsTrainingMovementAllowed());
     Manager->SetTrainingStage(EGuidedTrainingStage::BathroomVideo);
     TestTrue(TEXT("Bathroom video permits movement and turning"), Manager->IsTrainingMovementAllowed());
+    UTrainingMediaControllerComponent* Media = NewObject<UTrainingMediaControllerComponent>(Manager);
+    Manager->AddInstanceComponent(Media); Media->RegisterComponent(); Manager->LessonMediaController = Media;
+    Media->Session.State = FTrainingPlaybackSession::EState::Playing;
+    TestTrue(TEXT("Playing video enables lesson circle"), Manager->IsLessonBoundaryActive());
+    for (const auto State : { FTrainingPlaybackSession::EState::Opening, FTrainingPlaybackSession::EState::RetryPending, FTrainingPlaybackSession::EState::Failed })
+    {
+        Media->Session.State = State;
+        TestFalse(TEXT("Media loading or recovery popup has no lesson boundary"), Manager->IsLessonBoundaryActive());
+        TestTrue(TEXT("Media recovery popup permits distant movement"), Manager->IsTrainingLocationAllowed(FVector(9000, 9000, 0)));
+    }
     Manager->SetTrainingStage(EGuidedTrainingStage::TransferVideo);
     TestTrue(TEXT("Transfer video permits movement and turning"), Manager->IsTrainingMovementAllowed());
     TestFalse(TEXT("Premature conversation blocked"), Manager->BeginConversationResponse());
     TestFalse(TEXT("Premature Continue blocked"), Manager->BeginRoomTransition());
     Manager->SetTrainingStage(EGuidedTrainingStage::Conversation);
+    TestTrue(TEXT("Conversation popup has no distance restriction"), Manager->IsTrainingLocationAllowed(FVector(9000, 9000, 0)));
     TestFalse(TEXT("Next before response blocked"), Manager->BeginTransferLesson());
     TestTrue(TEXT("First conversation response accepted"), Manager->BeginConversationResponse());
     TestFalse(TEXT("Repeated conversation response blocked"), Manager->BeginConversationResponse());
@@ -76,6 +117,7 @@ bool FCNAGuidedTrainingTest::RunTest(const FString& Parameters)
     Patient->SetInteractionPhase(EPatientInteractionPhase::BedSeating);
     Manager->UpdateTrainingUI();
     TestTrue(TEXT("Bed seating permits movement and turning"), Manager->IsTrainingMovementAllowed());
+    TestTrue(TEXT("Bed instructions have no distance restriction"), Manager->IsTrainingLocationAllowed(FVector(9000, 9000, 0)));
     Patient->SetInteractionPhase(EPatientInteractionPhase::BeltTransfer);
     Manager->UpdateTrainingUI();
     TestFalse(TEXT("Belt step denies direct patient grab"), Patient->IsGrabInteractionEnabled());
@@ -100,6 +142,28 @@ bool FCNAGuidedTrainingTest::RunTest(const FString& Parameters)
     TestEqual(TEXT("Completed guided stage stays terminal"), Manager->GetTrainingStage(), EGuidedTrainingStage::Complete);
     TestFalse(TEXT("Completed training denies belt"), Belt->IsGrabInteractionEnabled());
     TestFalse(TEXT("Completed task cannot retry lift"), Task->RetryBeltLift());
+    UGameInstance* ResultInstance = NewObject<UGameInstance>(GEngine);
+    ResultInstance->InitializeStandalone();
+    ATransferManagerActor* ResultManager = ResultInstance->GetWorld()->SpawnActor<ATransferManagerActor>();
+    ResultManager->bGuidedTraining = true;
+    ResultManager->SetTrainingStage(EGuidedTrainingStage::Complete);
+    ResultManager->UpdateStatus();
+    if (TestNotNull(TEXT("Native final result panel created"), ResultManager->TrainingStatus.Get()))
+    {
+        TestEqual(TEXT("Native final surface grows for result padding"), ResultManager->TrainingStatus->GetDrawSize(), FVector2D(1200, 600));
+        UUserWidget* ResultWidget = ResultManager->TrainingStatus->GetUserWidgetObject();
+        UBorder* ResultBorder = ResultWidget && ResultWidget->WidgetTree ? Cast<UBorder>(ResultWidget->WidgetTree->FindWidget(TEXT("Border_102"))) : nullptr;
+        if (TestNotNull(TEXT("Native final result background"), ResultBorder))
+        {
+            const FMargin Before = ResultBorder->GetPadding();
+            TestEqual(TEXT("Final result reserves 24 extra bottom pixels"), Before.Bottom - Before.Top, 24.f);
+            ResultManager->ResultPopupExtraBottomPadding = 60.f;
+            ResultManager->UpdateStatus(); ResultManager->UpdateStatus();
+            TestEqual(TEXT("Live bottom padding does not accumulate"), ResultBorder->GetPadding().Bottom - Before.Bottom, 36.f);
+            TestEqual(TEXT("Larger editor padding grows final surface"), ResultManager->TrainingStatus->GetDrawSize(), FVector2D(1200, 636));
+        }
+    }
+    ResultInstance->Shutdown();
     World->DestroyWorld(false);
     return true;
 }

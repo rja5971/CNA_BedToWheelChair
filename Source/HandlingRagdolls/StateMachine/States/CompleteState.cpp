@@ -28,21 +28,13 @@ FText UCompleteState::GetInstructions() const
 	UScoringComponent* Scoring = OwningStateMachine->GetScoring();
 	if (Scoring)
 	{
-		FString Result = FString::Printf(
-			TEXT("Transfer Complete! Score: %.0f%% (Grade: %s). Time: %.1f seconds."),
+		const FString Result = FString::Printf(
+			TEXT("Transfer Complete!\nScore: %.0f%%\nGrade: %s\nTime taken: %.0f seconds\nResult: %s"),
 			Scoring->GetScorePercent(),
 			*Scoring->GetGrade(),
-			Scoring->GetCompletionTime()
+			Scoring->GetCompletionTime(),
+			Scoring->HasPassed() ? TEXT("Passed") : TEXT("Failed - Score below threshold")
 		);
-
-		if (Scoring->HasPassed())
-		{
-			Result += TEXT(" PASSED!");
-		}
-		else
-		{
-			Result += TEXT(" FAILED - Score below passing threshold.");
-		}
 
 		return FText::FromString(Result);
 	}

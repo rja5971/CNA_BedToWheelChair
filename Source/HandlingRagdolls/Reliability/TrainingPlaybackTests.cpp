@@ -1,4 +1,8 @@
 #include "TrainingPlaybackSession.h"
+#include "TrainingMediaControllerComponent.h"
+#include "Blueprint/UserWidget.h"
+#include "Engine/GameInstance.h"
+#include "Engine/Engine.h"
 #include "Misc/AutomationTest.h"
 #include "EnhancedInputDeveloperSettings.h"
 #include "InputMappingContext.h"
@@ -126,5 +130,30 @@ bool FCNAMenuCursorRoutingTest::RunTest(const FString& Parameters)
     }
     World->DestroyWorld(false);
     return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCNAEmptyCaptionTest, "CNA.Reliability.Media.EmptyCaptionPresentation", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FCNAEmptyCaptionTest::RunTest(const FString& Parameters)
+{
+    UGameInstance* Instance = NewObject<UGameInstance>(GEngine); Instance->InitializeStandalone();
+    UWorld* World = Instance->GetWorld();
+    UClass* Class = LoadClass<AActor>(nullptr, TEXT("/Game/Project/Blueprints/Actors/BP_MediaDisplay.BP_MediaDisplay_C"));
+    AActor* Display = Class ? World->SpawnActor<AActor>(Class) : nullptr;
+    UWidgetComponent* Panel = Display ? Cast<UWidgetComponent>(UCNAReliabilityLibrary::ObjectProperty(Display, TEXT("TextWidget"))) : nullptr;
+    if (!TestNotNull(TEXT("Actual video status panel"), Panel)) { Instance->Shutdown(); return false; }
+    UTrainingMediaControllerComponent* Controller = NewObject<UTrainingMediaControllerComponent>(Display);
+    Display->AddInstanceComponent(Controller); Controller->RegisterComponent(); Controller->ActiveDisplay = Display;
+    Controller->SetStatusText(FText::GetEmpty());
+    TestFalse(TEXT("Empty caption has no visible white card"), Panel->IsVisible());
+    TestEqual(TEXT("Empty caption cannot intercept input"), Panel->GetCollisionEnabled(), ECollisionEnabled::NoCollision);
+    Controller->SetStatusText(FText::FromString(TEXT("   ")));
+    TestFalse(TEXT("Whitespace caption also stays hidden"), Panel->IsVisible());
+    Controller->SetStatusText(FText::FromString(TEXT("Loading video...")));
+    TestTrue(TEXT("Meaningful loading feedback remains visible"), Panel->IsVisible());
+    Controller->SetStatusText(FText::GetEmpty()); Controller->ShowError();
+    TestTrue(TEXT("Retry restores visibility after an empty caption"), Panel->IsVisible());
+    TestEqual(TEXT("Retry restores pointer collision"), Panel->GetCollisionEnabled(), ECollisionEnabled::QueryOnly);
+    Controller->CancelPlayback(Display);
+    Instance->Shutdown(); return true;
 }
 #endif

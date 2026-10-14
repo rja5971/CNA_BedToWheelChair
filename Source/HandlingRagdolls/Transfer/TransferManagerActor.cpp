@@ -14,6 +14,7 @@
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerController.h"
 #include "EngineUtils.h"
+#include "Materials/MaterialInterface.h"
 
 ATransferManagerActor::ATransferManagerActor()
 {
@@ -25,6 +26,7 @@ ATransferManagerActor::ATransferManagerActor()
 	Scoring = CreateDefaultSubobject<UScoringComponent>(TEXT("Scoring"));
 	SpineMonitor = CreateDefaultSubobject<USpineMonitorComponent>(TEXT("SpineMonitor"));
 	TransferGuidance = CreateDefaultSubobject<UTransferGuidanceComponent>(TEXT("TransferGuidance"));
+    WalkHologramMaterial = LoadObject<UMaterialInterface>(nullptr, TEXT("/Game/PatientSetup/Guidance/M_LessonWalkArea.M_LessonWalkArea"), nullptr, LOAD_NoWarn);
 }
 
 void ATransferManagerActor::BeginPlay()

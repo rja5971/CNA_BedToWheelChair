@@ -14,6 +14,9 @@
 #include "Components/SizeBox.h"
 #include "Components/SizeBoxSlot.h"
 #include "Components/VerticalBoxSlot.h"
+#include "Components/TextRenderComponent.h"
+#include "Components/TransferGuidanceComponent.h"
+#include "Materials/MaterialInterface.h"
 #include "Engine/World.h"
 #include "Engine/Level.h"
 #include "Engine/SimpleConstructionScript.h"
@@ -846,10 +849,17 @@ void FixPopupLayouts()
                 if (UBorder* Border = Cast<UBorder>(Widget))
                 {
                     Border->SetHorizontalAlignment(HAlign_Fill); Border->SetVerticalAlignment(VAlign_Center);
-                    if (Border->GetFName() == TEXT("Border_102")) Border->SetPadding(FMargin(24.f, 12.f));
+                    if (Border->GetFName() == TEXT("Border_102")) Border->SetPadding(FMargin(29.f, 17.f));
                 }
             if (!bInstruction && !bWrong)
-                if (UBorder* Border = Cast<UBorder>(Widget)) Border->SetHorizontalAlignment(HAlign_Fill);
+                if (UBorder* Border = Cast<UBorder>(Widget))
+                {
+                    Border->SetHorizontalAlignment(HAlign_Fill);
+                    Border->SetPadding(FMargin(55.f));
+                }
+            if (bWrong)
+                if (UBorder* Border = Cast<UBorder>(Widget))
+                    if (Border->GetFName() == TEXT("Popup")) Border->SetPadding(FMargin(5.f));
             if (bWrong)
                 if (USizeBox* Box = Cast<USizeBox>(Widget))
                     if (Cast<UTextBlock>(Box->GetContent()))
@@ -858,6 +868,55 @@ void FixPopupLayouts()
         CompileAndSave(BP);
     }
     UE_LOG(LogTemp, Display, TEXT("CNA_POPUPS: responsive instruction background and wrapped popup messages saved"));
+}
+
+void ApplyEditorPolish()
+{
+    FixPopupLayouts();
+    FAssetRegistryModule& Registry = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry"));
+    TArray<FAssetData> Assets;
+    Registry.Get().GetAssetsByPath(TEXT("/Game/Project/Blueprints/UI"), Assets, true);
+    TArray<UWidgetBlueprint*> Widgets;
+    for (const FAssetData& Asset : Assets)
+        if (UWidgetBlueprint* Widget = Cast<UWidgetBlueprint>(Asset.GetAsset())) Widgets.Add(Widget);
+    Widgets.Add(CastChecked<UWidgetBlueprint>(Blueprint(TEXT("/Game/VRTemplate/Blueprints/WidgetMenu"))));
+    for (UWidgetBlueprint* Widget : Widgets)
+    {
+        Widget->WidgetTree->ForEachWidget([](UWidget* Child)
+        {
+            if (UTextBlock* Text = Cast<UTextBlock>(Child))
+            {
+                FSlateFontInfo Font = Text->GetFont();
+                Font.OutlineSettings.OutlineSize = 0;
+                Font.OutlineSettings.OutlineColor = FLinearColor(.01f, .04f, .04f, .9f);
+                Text->SetFont(Font);
+            }
+        });
+        CompileAndSave(Widget);
+    }
+    UMaterialInterface* Outline = LoadObject<UMaterialInterface>(nullptr, TEXT("/Game/PatientSetup/Guidance/M_TrainingTextOutline.M_TrainingTextOutline"));
+    Require(Outline != nullptr, TEXT("World-space text outline material missing"));
+    UWorld* World = UEditorLoadingAndSavingUtils::LoadMap(TEXT("/Game/Project/Maps/CNA_Map_01"));
+    Require(World != nullptr, TEXT("Could not load delivery map for editor polish"));
+    int32 Managers = 0;
+    for (ULevel* Level : World->GetLevels()) for (AActor* Actor : Level->Actors)
+    {
+        if (!Actor) continue;
+        if (ATransferManagerActor* Manager = Cast<ATransferManagerActor>(Actor))
+        {
+            Manager->TrainingMovementRadiusMeters = 2.f;
+            Manager->bShowAllowedWalkHologram = true;
+            Manager->GetTransferGuidance()->VisualSettings.HintColor = FLinearColor(0.f, .45f, .65f);
+            Manager->GetTransferGuidance()->VisualSettings.GhostOpacity = .45f;
+            ++Managers;
+        }
+        TArray<UTextRenderComponent*> Labels; Actor->GetComponents(Labels);
+        for (UTextRenderComponent* Label : Labels)
+            if (Label->TextMaterial && Label->TextMaterial->GetName().StartsWith(TEXT("DefaultTextMaterial"))) Label->SetTextMaterial(Outline);
+    }
+    Require(Managers == 1, TEXT("Expected one delivery transfer manager"));
+    Require(UEditorLoadingAndSavingUtils::SaveMap(World, TEXT("/Game/Project/Maps/CNA_Map_01")), TEXT("Could not save editor polish defaults"));
+    UE_LOG(LogTemp, Display, TEXT("CNA_EDITOR_POLISH: removed outlines from %d UI widgets; floating text outlines retained; two-metre lesson radius and floor hologram saved"), Widgets.Num());
 }
 
 }
@@ -869,6 +928,8 @@ int32 UCNAReliabilityCommandlet::Main(const FString& Params)
     const bool bApply = FParse::Param(*Params, TEXT("Apply"));
     try
     {
+        if (FParse::Param(*Params, TEXT("EditorPolish"))) { ApplyEditorPolish(); return 0; }
+        if (FParse::Param(*Params, TEXT("LessonBoundary"))) { ApplyEditorPolish(); return 0; }
         if (FParse::Param(*Params, TEXT("FixPopupLayouts"))) { FixPopupLayouts(); return 0; }
         if (FParse::Param(*Params, TEXT("QuestFeedback"))) { ApplyQuestFeedback(); return 0; }
         if (FParse::Param(*Params, TEXT("GuidedTraining"))) { MigrateGuidedTraining(); return 0; }

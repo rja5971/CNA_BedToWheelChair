@@ -276,6 +276,8 @@ void UCNAReliabilityLibrary::EnsureTrainingFade(AActor* Pawn)
 }
 void UCNAReliabilityLibrary::TrainingFadeOut(const UObject* Context)
 {
+    if (ATransferManagerActor* Manager = GuidedManager(Context))
+        UE_LOG(LogTemp, Display, TEXT("GUIDED_FADE: Out stage=%d"), int32(Manager->GetTrainingStage()));
     APawn* Pawn = UGameplayStatics::GetPlayerPawn(Context, 0);
     EnsureTrainingFade(Pawn);
     if (UTimelineComponent* Timeline = Cast<UTimelineComponent>(ObjectProperty(Pawn, TEXT("FadeTimeline")))) Timeline->SetPlayRate(Timeline->GetTimelineLength());
@@ -283,7 +285,10 @@ void UCNAReliabilityLibrary::TrainingFadeOut(const UObject* Context)
 }
 void UCNAReliabilityLibrary::TrainingFadeIn(const UObject* Context)
 {
+    if (ATransferManagerActor* Manager = GuidedManager(Context))
+        UE_LOG(LogTemp, Display, TEXT("GUIDED_FADE: In stage=%d"), int32(Manager->GetTrainingStage()));
     APawn* Pawn = UGameplayStatics::GetPlayerPawn(Context, 0);
+    if (ATransferManagerActor* Manager = GuidedManager(Context)) Manager->CorrectLessonArrival();
     EnsureTrainingFade(Pawn);
     if (UTimelineComponent* Timeline = Cast<UTimelineComponent>(ObjectProperty(Pawn, TEXT("FadeTimeline")))) Timeline->SetPlayRate(Timeline->GetTimelineLength() / .5f);
     CallNoArgs(Pawn, TEXT("FadeIn"));

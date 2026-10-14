@@ -173,9 +173,14 @@ patient conversation, transfer video and the native patient transfer through
 `TransferManagerActor.bGuidedTraining`. Required instructions remain visible
 with Hints off. An interrupted lift returns to the post-rotation seated bed
 checkpoint with the belt attached, without replaying lessons or resetting score.
-Quizzes, videos and bed seating permit turning and movement within an editable
-five-metre horizontal radius. Adjust **Training Movement Radius Meters** on the
-placed transfer manager under **CNA / Training / Movement**. Room fades and the
+Quizzes and playing videos permit turning and movement within an editable
+two-metre horizontal radius centred on the active quiz/video panel. Adjust
+**Lesson Movement Radius** and **Show Allowed Walk Hologram** on the placed
+transfer manager under **CNA / Training / Movement**. These developer settings
+are saved in the map for the build; there is no player settings menu for them.
+Popups, conversations, bed seating and carry instructions have no distance limit.
+Lesson arrivals outside the circle are corrected to a verified walkable point during a fade.
+Room fades and the
 accepted chair handoff retain their movement locks. The exit button says **Quit**.
 See [guided training stabilization](docs/GUIDED_TRAINING_STABILIZATION.md) for
 runtime checks, recovery behavior and headset acceptance evidence.

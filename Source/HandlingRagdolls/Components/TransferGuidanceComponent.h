@@ -47,11 +47,13 @@ struct FTransferGuidanceVisualSettings
     UPROPERTY(EditAnywhere, BlueprintReadWrite) FVector SitUpDirection = FVector(0, 0, 40);
     UPROPERTY(EditAnywhere, BlueprintReadWrite) FVector LiftDirection = FVector(0, 0, 25);
     UPROPERTY(EditAnywhere, BlueprintReadWrite) FVector LabelOffset = FVector(0, 0, 22);
+    /** Floating handle text only: X toward viewer, Y viewer's right, Z up, in centimetres. */
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, meta=(Units="cm")) FVector BeltHandleLabelOffset = FVector(40, 0, 22);
     UPROPERTY(EditAnywhere, BlueprintReadWrite) FVector ChairLabelOffset = FVector(0, 0, 85);
     UPROPERTY(EditAnywhere, BlueprintReadWrite, meta=(ClampMin="0.5")) float LoopDuration = 2.f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, meta=(ClampMin="1")) float TextSize = 4.f;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, meta=(ClampMin="0", ClampMax="1")) float GhostOpacity = .32f;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite) FLinearColor HintColor = FLinearColor(0.f, .8f, 1.f);
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, meta=(ClampMin="0", ClampMax="1")) float GhostOpacity = .45f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite) FLinearColor HintColor = FLinearColor(0.f, .45f, .65f);
     UPROPERTY(EditAnywhere, BlueprintReadWrite) FLinearColor ReadyColor = FLinearColor(.15f, 1.f, .25f);
 };
 
@@ -103,6 +105,7 @@ private:
     UPROPERTY(Transient) TObjectPtr<UTextRenderComponent> Label;
     UPROPERTY(Transient) TObjectPtr<UMaterialInstanceDynamic> GhostMID;
     UPROPERTY() TObjectPtr<UMaterialInterface> GhostMaterial;
+    UPROPERTY() TObjectPtr<UMaterialInterface> TextOutlineMaterial;
     UPROPERTY() TObjectPtr<UAnimSequence> ChairPose;
     UPROPERTY() TObjectPtr<UStaticMesh> SphereMesh;
     UPROPERTY() TObjectPtr<UStaticMesh> CylinderMesh;

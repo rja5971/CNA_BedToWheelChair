@@ -86,6 +86,7 @@ void UTrainingMediaControllerComponent::RequestPlayback(AActor* Display)
         if (!Manager->CanRequestLesson(Display)) return;
     if (ActiveDisplay == Display && Session.State != FTrainingPlaybackSession::EState::Idle) return;
     if (ActiveDisplay) CancelPlayback(ActiveDisplay);
+    bLessonRecoveryPending = false;
     ActiveDisplay = Display;
     UObject* Content = UCNAReliabilityLibrary::ObjectProperty(Display, TEXT("ContentData"));
     Source = Cast<UMediaSource>(UCNAReliabilityLibrary::ObjectProperty(Content, TEXT("MediaSource")));
@@ -127,6 +128,12 @@ void UTrainingMediaControllerComponent::MediaOpened(FString Url)
 {
     if (!Player || Url != ExpectedUrl || !IsValid(ActiveDisplay) || !Session.Opened(GetWorld()->GetRealTimeSeconds())) return;
     if (!Player->Play()) { Fail(TEXT("Play rejected after media opened")); return; }
+    if (bLessonRecoveryPending)
+    {
+        bLessonRecoveryPending = false;
+        if (ATransferManagerActor* Manager = UCNAReliabilityLibrary::GuidedManager(ActiveDisplay))
+            Manager->LessonPlaybackRecovered(ActiveDisplay);
+    }
     UObject* Content = UCNAReliabilityLibrary::ObjectProperty(ActiveDisplay, TEXT("ContentData"));
     if (FTextProperty* Text = FindFProperty<FTextProperty>(Content ? Content->GetClass() : nullptr, TEXT("DisplayText")))
         SetStatusText(Text->GetPropertyValue_InContainer(Content));
@@ -160,6 +167,7 @@ void UTrainingMediaControllerComponent::Watchdog()
 void UTrainingMediaControllerComponent::Fail(const FString& Reason)
 {
     if (!Session.Fail()) return;
+    bLessonRecoveryPending = true;
     UE_LOG(LogCNAMedia, Warning, TEXT("Failure display=%s reason=%s next=%s"), *GetNameSafe(ActiveDisplay), *Reason,
         Session.State == FTrainingPlaybackSession::EState::RetryPending ? TEXT("automatic retry") : TEXT("manual retry"));
     UnbindPlayer();
@@ -192,13 +200,19 @@ void UTrainingMediaControllerComponent::MediaEnded()
     ActiveDisplay = nullptr;
     Source = nullptr;
     UE_LOG(LogCNAMedia, Display, TEXT("Completed display=%s (training completion dispatched once)"), *GetNameSafe(Completed));
-    if (ATransferManagerActor* Manager = UCNAReliabilityLibrary::GuidedManager(Completed)) Manager->LessonCompleted(Completed);
-    UCNAReliabilityLibrary::CallNoArgs(Completed, TEXT("NotifyPlaybackComplete"));
+    // The guided patient quiz owns placement and its fade. Its legacy delegate
+    // starts another latent teleport/fade. Retain the bathroom Continue popup path.
+    ATransferManagerActor* Manager = UCNAReliabilityLibrary::GuidedManager(Completed);
+    const bool bNativeQuizCompletion = Manager && Manager->bGuidedTraining
+        && Manager->GetTrainingStage() == EGuidedTrainingStage::TransferVideo;
+    if (Manager && Manager->bGuidedTraining) Manager->LessonCompleted(Completed);
+    if (!bNativeQuizCompletion) UCNAReliabilityLibrary::CallNoArgs(Completed, TEXT("NotifyPlaybackComplete"));
 }
 
 void UTrainingMediaControllerComponent::CancelPlayback(AActor* Display)
 {
     if (Display && Display != ActiveDisplay) return;
+    bLessonRecoveryPending = false;
     Session.Cancel();
     if (GetWorld())
     {
@@ -251,6 +265,10 @@ void UTrainingMediaControllerComponent::SetStatusText(const FText& Text)
     if (FTextProperty* Property = FindFProperty<FTextProperty>(Function, TEXT("InText")))
         Property->SetPropertyValue_InContainer(Params.GetStructMemory(), Text);
     Widget->ProcessEvent(Function, Params.GetStructMemory());
+    const bool bHasText = !Text.IsEmptyOrWhitespace();
+    Component->SetVisibility(bHasText);
+    Component->SetCollisionEnabled(bHasText ? ECollisionEnabled::QueryOnly : ECollisionEnabled::NoCollision);
+    if (UUserWidget* Instance = Component->GetUserWidgetObject()) Instance->SetIsEnabled(bHasText);
 }
 
 void UTrainingMediaControllerComponent::ShowError()
@@ -266,6 +284,8 @@ void UTrainingMediaControllerComponent::ShowError()
     ErrorComponent->SetWidget(Error);
     ErrorComponent->SetDrawSize(FVector2D(1000, 320));
     ErrorComponent->SetVisibility(true);
+    ErrorComponent->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+    Error->SetIsEnabled(true);
 }
 
 void UTrainingMediaControllerComponent::RestoreErrorWidget()
@@ -300,6 +320,9 @@ void UTrainingMediaControllerComponent::EnterForeground()
     {
         Session.LastProgressAt = GetWorld()->GetRealTimeSeconds();
         if (Player && !Player->Play()) Fail(TEXT("Could not resume after returning to the app"));
+        else if (Player)
+            if (ATransferManagerActor* Manager = UCNAReliabilityLibrary::GuidedManager(ActiveDisplay))
+                Manager->LessonPlaybackRecovered(ActiveDisplay);
     }
     else if (Session.State == FTrainingPlaybackSession::EState::Opening)
         Session.StartedAt = GetWorld()->GetRealTimeSeconds();

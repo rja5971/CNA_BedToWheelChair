@@ -12,14 +12,16 @@ void UTrainingMediaErrorWidget::NativeOnInitialized()
 	Super::NativeOnInitialized();
 	UBorder* Border = WidgetTree->ConstructWidget<UBorder>();
 	Border->SetBrushColor(FLinearColor(0.025f, 0.025f, 0.025f, 1));
-	Border->SetPadding(FMargin(24));
+	Border->SetPadding(FMargin(29));
 	UVerticalBox* Box = WidgetTree->ConstructWidget<UVerticalBox>();
 	Border->SetContent(Box);
 	UTextBlock* Message = WidgetTree->ConstructWidget<UTextBlock>();
 	Message->SetText(NSLOCTEXT("CNAMedia", "PlaybackError", "Video could not play.\nSelect Retry, or use Restart in the menu."));
 	Message->SetJustification(ETextJustify::Center);
 	Message->SetAutoWrapText(true);
-	FSlateFontInfo Font = Message->GetFont(); Font.Size = 30; Message->SetFont(Font);
+	FSlateFontInfo Font = Message->GetFont(); Font.Size = 30;
+    Font.OutlineSettings.OutlineSize = 0;
+    Message->SetFont(Font);
 	Box->AddChildToVerticalBox(Message)->SetPadding(FMargin(0, 0, 0, 20));
 	UButton* Retry = WidgetTree->ConstructWidget<UButton>();
 	Retry->SetClickMethod(EButtonClickMethod::DownAndUp);

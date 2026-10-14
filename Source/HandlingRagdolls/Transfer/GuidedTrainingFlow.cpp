@@ -9,6 +9,9 @@
 #include "Components/WidgetComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Blueprint/UserWidget.h"
+#include "Blueprint/WidgetTree.h"
+#include "Components/Border.h"
+#include "Components/TextBlock.h"
 #include "GameFramework/Pawn.h"
 #include "Kismet/GameplayStatics.h"
 #include "EngineUtils.h"
@@ -63,6 +66,15 @@ void ATransferManagerActor::Tick(float DeltaSeconds)
     InitializeTrainingUI();
     UpdateTrainingUI();
     UpdateStatus();
+    if (bTrainingUIReady && !bInitialLessonPrepared)
+    {
+        bInitialLessonPrepared = true;
+        bLessonArrivalPending = true;
+        PrepareLessonArrival();
+    }
+    // Visibility and tracked movement never start a transition. Arrivals are
+    // requested by stage entry, popup dismissal or an explicit media recovery.
+    UpdateWalkHologram();
     const bool bLocked = !IsTrainingMovementAllowed();
     if (!bLocked) CaptureMovementOrigin();
     if (bLocked && !bWasMovementLocked)
@@ -82,15 +94,21 @@ void ATransferManagerActor::Tick(float DeltaSeconds)
 void ATransferManagerActor::EndPlay(const EEndPlayReason::Type Reason)
 {
     GetWorldTimerManager().ClearTimer(TrainingTransitionTimer);
+    GetWorldTimerManager().ClearTimer(LessonArrivalTimer);
     Super::EndPlay(Reason);
 }
 
 void ATransferManagerActor::SetTrainingStage(EGuidedTrainingStage Stage)
 {
     if (TrainingStage == Stage || TrainingStage == EGuidedTrainingStage::Complete) return;
+    const EGuidedTrainingStage Previous = TrainingStage;
     TrainingStage = Stage;
-    if (Stage == EGuidedTrainingStage::BathroomTransition || Stage == EGuidedTrainingStage::RoomTransition)
-        bMovementOriginValid = false;
+    if (Stage == EGuidedTrainingStage::EntryQuiz || Stage == EGuidedTrainingStage::PatientQuiz
+        || Stage == EGuidedTrainingStage::TransferVideo || Stage == EGuidedTrainingStage::BathroomTransition
+        || (Stage == EGuidedTrainingStage::BathroomVideo && Previous != EGuidedTrainingStage::BathroomTransition))
+        bLessonArrivalPending = true;
+    bMovementOriginValid = false;
+    if (bLessonArrivalPending) PrepareLessonArrival();
     UE_LOG(LogTemp, Display, TEXT("GuidedTraining: stage=%d"), int32(Stage));
     UpdateTrainingUI();
 }
@@ -103,7 +121,7 @@ void ATransferManagerActor::UpdateTrainingUI()
             bTransfer && PatientRef->GetInteractionPhase() == EPatientInteractionPhase::BeltTransfer);
     if (!bTrainingUIReady) return;
     const bool bQuiz = TrainingStage == EGuidedTrainingStage::EntryQuiz || TrainingStage == EGuidedTrainingStage::PatientQuiz;
-    Present(Panel(QuizActor, TEXT("QuizPanel")), bQuiz && !bWrongAnswerOpen);
+    Present(Panel(QuizActor, TEXT("QuizPanel")), bQuiz && !bWrongAnswerOpen && !bLessonRelocating);
     Present(Panel(QuizActor, TEXT("PopupComponent")), bQuiz && bWrongAnswerOpen);
     ApplyPopupOffset(Panel(QuizActor, TEXT("PopupComponent")), WrongAnswerPopupOffset);
     const bool bChat = TrainingStage == EGuidedTrainingStage::Conversation;
@@ -140,7 +158,7 @@ bool ATransferManagerActor::SubmitQuiz(UObject* Widget, int32 Answer)
     UWidgetComponent* Quiz = Panel(QuizActor, TEXT("QuizPanel"));
     const int32 Expected = TrainingStage == EGuidedTrainingStage::EntryQuiz ? 0
         : TrainingStage == EGuidedTrainingStage::PatientQuiz ? 1 : -1;
-    if (!Quiz || Quiz->GetUserWidgetObject() != Widget || Expected < 0 || bWrongAnswerOpen
+    if (!Quiz || Quiz->GetUserWidgetObject() != Widget || Expected < 0 || bWrongAnswerOpen || bLessonRelocating
         || Integer(Widget, TEXT("CurrentQuestionIndex")) != Expected || Answer < 1 || Answer > 3) return false;
     const int32 Correct = Integer(Widget, TEXT("CorrectAnswer"));
     if (Correct < 1 || Correct > 3) return false;
@@ -167,7 +185,7 @@ bool ATransferManagerActor::SubmitQuiz(UObject* Widget, int32 Answer)
         {
             if (TrainingStage != EGuidedTrainingStage::BathroomTransition) return;
             SetTrainingStage(EGuidedTrainingStage::BathroomVideo);
-            UCNAReliabilityLibrary::RequestPlayback(FindLesson(1));
+            if (!bLessonRelocating) UCNAReliabilityLibrary::RequestPlayback(FindLesson(1));
         }, 1.5f, false);
     }
     else StartTransfer();
@@ -178,6 +196,7 @@ void ATransferManagerActor::DismissWrongAnswer()
 {
     if (!bWrongAnswerOpen) return;
     bWrongAnswerOpen = false;
+    PrepareLessonArrival();
     UpdateTrainingUI();
 }
 
@@ -219,7 +238,7 @@ bool ATransferManagerActor::BeginTransferLesson()
             Target->CopyCompleteValue(Target->ContainerPtrToValuePtr<void>(Widget), Source->ContainerPtrToValuePtr<void>(ChatActor));
     }
     SetTrainingStage(EGuidedTrainingStage::TransferVideo);
-    UCNAReliabilityLibrary::RequestPlayback(Lesson);
+    if (!bLessonRelocating) UCNAReliabilityLibrary::RequestPlayback(Lesson);
     return true;
 }
 
@@ -237,8 +256,14 @@ AActor* ATransferManagerActor::FindLesson(int32 ID) const
 
 bool ATransferManagerActor::CanRequestLesson(AActor* Display) const
 {
+    if (bLessonRelocating) return false;
     return (TrainingStage == EGuidedTrainingStage::BathroomVideo && Display == FindLesson(1))
         || (TrainingStage == EGuidedTrainingStage::TransferVideo && Display == FindLesson(2));
+}
+
+void ATransferManagerActor::LessonPlaybackRecovered(AActor* Display)
+{
+    if (bGuidedTraining && CanRequestLesson(Display)) PrepareLessonArrival();
 }
 
 void ATransferManagerActor::LessonCompleted(AActor* Display)
@@ -247,6 +272,8 @@ void ATransferManagerActor::LessonCompleted(AActor* Display)
     if (TrainingStage == EGuidedTrainingStage::BathroomVideo) SetTrainingStage(EGuidedTrainingStage::BathroomContinue);
     else
     {
+        // Move the next lesson before its arrival fade, preserving the authored quiz scale.
+        if (QuizActor && Display) QuizActor->SetActorLocationAndRotation(Display->GetActorLocation(), Display->GetActorQuat());
         UWidgetComponent* Quiz = Panel(QuizActor, TEXT("QuizPanel"));
         if (Quiz) UCNAReliabilityLibrary::CallNoArgs(Quiz->GetUserWidgetObject(), TEXT("LoadNextQuestion"));
         SetTrainingStage(EGuidedTrainingStage::PatientQuiz);
@@ -256,6 +283,7 @@ void ATransferManagerActor::LessonCompleted(AActor* Display)
 bool ATransferManagerActor::IsTrainingMovementAllowed() const
 {
     if (!bGuidedTraining) return true;
+    if (bLessonRelocating) return false;
     if (IsValid(UCNAReliabilityLibrary::ObjectProperty(UGameplayStatics::GetPlayerPawn(this, 0), TEXT("MenuReference")))) return false;
     if (TrainingStage == EGuidedTrainingStage::BathroomTransition || TrainingStage == EGuidedTrainingStage::RoomTransition
         || TrainingStage == EGuidedTrainingStage::Error) return false;
@@ -265,18 +293,14 @@ bool ATransferManagerActor::IsTrainingMovementAllowed() const
 
 void ATransferManagerActor::CaptureMovementOrigin() const
 {
-    if (bMovementOriginValid) return;
-    if (const APawn* Pawn = UGameplayStatics::GetPlayerPawn(this, 0))
-    {
-        MovementOrigin = UCNAReliabilityLibrary::TrainingViewLocation(Pawn);
-        bMovementOriginValid = true;
-    }
+    bMovementOriginValid = GetLessonMovementCenter(MovementOrigin);
 }
 
 bool ATransferManagerActor::IsTrainingLocationAllowed(const FVector& WorldLocation) const
 {
     if (!bGuidedTraining) return true;
     if (!IsTrainingMovementAllowed() || WorldLocation.ContainsNaN()) return false;
+    if (!IsLessonBoundaryActive()) return true;
     CaptureMovementOrigin();
     return bMovementOriginValid && FVector::DistSquared2D(WorldLocation, MovementOrigin)
         <= FMath::Square(FMath::Max(.1f, TrainingMovementRadiusMeters) * 100.f) + KINDA_SMALL_NUMBER;
@@ -286,6 +310,7 @@ FVector ATransferManagerActor::ClampTrainingMovementDelta(const APawn* Pawn, con
 {
     if (!bGuidedTraining) return Delta;
     if (!Pawn || !IsTrainingMovementAllowed() || Delta.ContainsNaN()) return FVector::ZeroVector;
+    if (!IsLessonBoundaryActive()) return FVector(Delta.X, Delta.Y, 0.f);
     CaptureMovementOrigin();
     if (!bMovementOriginValid) return FVector::ZeroVector;
     const FVector Current = UCNAReliabilityLibrary::TrainingViewLocation(Pawn);
@@ -332,9 +357,51 @@ void ATransferManagerActor::TransferCompleted()
 void ATransferManagerActor::TransferFailed(FText Reason)
 {
     if (TrainingStage == EGuidedTrainingStage::Complete) return;
+    UE_LOG(LogTemp, Warning, TEXT("GuidedTraining: %s"), *Reason.ToString());
     TrainingError = Reason;
     SetTrainingStage(EGuidedTrainingStage::Error);
     UpdateStatus();
+}
+
+FVector ATransferManagerActor::CarryStatusLocation(const APawn* Pawn) const
+{
+    const FVector Pelvis = PatientRef ? PatientRef->GetPelvisLocation() : GetActorLocation();
+    FVector Forward = Pawn ? Pelvis - UCNAReliabilityLibrary::TrainingViewLocation(Pawn) : FVector::ForwardVector;
+    Forward.Z = 0.f;
+    if (!Forward.Normalize()) Forward = Pawn ? Pawn->GetActorForwardVector().GetSafeNormal2D() : FVector::ForwardVector;
+    const FVector Right = FVector::CrossProduct(FVector::UpVector, Forward);
+    return Pelvis + Forward * CarryPopupOffset.X + Right * CarryPopupOffset.Y + FVector::UpVector * CarryPopupOffset.Z;
+}
+
+void ATransferManagerActor::ApplyResultPopupPadding(UUserWidget* Widget)
+{
+    UBorder* Border = Widget && Widget->WidgetTree ? Cast<UBorder>(Widget->WidgetTree->FindWidget(TEXT("Border_102"))) : nullptr;
+    if (!Border) return;
+    if (!bStatusPaddingCaptured)
+    {
+        const FMargin Base = Border->GetPadding();
+        StatusBasePadding = FVector4(Base.Left, Base.Top, Base.Right, Base.Bottom);
+        bStatusPaddingCaptured = true;
+    }
+    Border->SetPadding(FMargin(StatusBasePadding.X, StatusBasePadding.Y, StatusBasePadding.Z, StatusBasePadding.W
+        + (TrainingStage == EGuidedTrainingStage::Complete ? FMath::Max(0.f, ResultPopupExtraBottomPadding) : 0.f)));
+    if (TrainingStage == EGuidedTrainingStage::Complete)
+    {
+        Border->SetVerticalAlignment(VAlign_Center);
+        Widget->WidgetTree->ForEachWidget([](UWidget* Child)
+        {
+            if (UTextBlock* Text = Cast<UTextBlock>(Child))
+            {
+                FSlateFontInfo Font = Text->GetFont();
+                Font.Size = 44; Font.TypefaceFontName = TEXT("Bold"); Font.OutlineSettings.OutlineSize = 0;
+                Text->SetFont(Font); Text->SetJustification(ETextJustify::Center);
+                Text->SetAutoWrapText(true);
+            }
+        });
+    }
+    if (TrainingStatus)
+        TrainingStatus->SetDrawSize(FVector2D(1200.f, TrainingStage == EGuidedTrainingStage::Complete
+            ? 600.f + FMath::Max(0.f, ResultPopupExtraBottomPadding - 24.f) : 360.f));
 }
 
 void ATransferManagerActor::UpdateStatus()
@@ -381,7 +448,10 @@ void ATransferManagerActor::UpdateStatus()
             Field->SetPropertyValue_InContainer(Params.GetStructMemory(), Text);
         Widget->ProcessEvent(Function, Params.GetStructMemory());
     }
-    const FVector Location = (PatientRef ? PatientRef->GetActorLocation() : GetActorLocation()) + StatusPanelOffset;
+    ApplyResultPopupPadding(Cast<UUserWidget>(Widget));
+    const bool bCarrying = TrainingStage == EGuidedTrainingStage::Transfer && PatientRef && PatientRef->IsKinematicCarryActive();
+    const FVector Location = bCarrying ? CarryStatusLocation(Pawn)
+        : (PatientRef ? PatientRef->GetActorLocation() : GetActorLocation()) + StatusPanelOffset;
     TrainingStatus->SetWorldLocation(Location);
     TrainingStatus->SetWorldScale3D(FVector(FMath::Max(.01f, StatusPanelScale)));
     if (Pawn) TrainingStatus->SetWorldRotation((UCNAReliabilityLibrary::TrainingViewLocation(Pawn) - Location).Rotation());

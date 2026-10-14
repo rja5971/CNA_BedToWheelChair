@@ -16,6 +16,9 @@ class ABeltActor;
 class UVRPatientCareBridgeComponent;
 class UTransferGuidanceComponent;
 class UWidgetComponent;
+class UStaticMeshComponent;
+class UMaterialInterface;
+class UTrainingMediaControllerComponent;
 
 UENUM(BlueprintType)
 enum class EGuidedTrainingStage : uint8
@@ -59,17 +62,33 @@ public:
     bool BeginTransferLesson();
     bool CanRequestLesson(AActor* Display) const;
     void LessonCompleted(AActor* Display);
+    void LessonPlaybackRecovered(AActor* Display);
     bool IsTrainingMovementAllowed() const;
     bool IsTrainingLocationAllowed(const FVector& WorldLocation) const;
     FVector ClampTrainingMovementDelta(const APawn* Pawn, const FVector& Delta) const;
-    /** Horizontal radius around arrival in each training area. Tracking stays free. */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="CNA|Training|Movement", meta=(ClampMin="0.1", Units="m"))
-    float TrainingMovementRadiusMeters = 5.f;
+    /** Horizontal radius centred on the visible quiz/video. Configure in the editor; tracking stays free. */
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="CNA|Training|Movement", meta=(ClampMin="0.1", Units="m", DisplayName="Lesson Movement Radius"))
+    float TrainingMovementRadiusMeters = 2.f;
+    /** Optional Target Point choosing the patient quiz's front-side arrival direction.
+        The player is placed on the circle edge in that direction and always faces the quiz. */
+    UPROPERTY(EditInstanceOnly, BlueprintReadOnly, Category="CNA|Training|Movement")
+    TObjectPtr<AActor> PatientQuizArrivalTarget;
+    /** Optional floor circle, independent of Hints. This editor setting is baked into the build. */
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="CNA|Training|Movement", meta=(DisplayName="Show Allowed Walk Hologram"))
+    bool bShowAllowedWalkHologram = true;
+    UFUNCTION(BlueprintPure, Category="CNA|Training") bool IsLessonBoundaryActive() const;
+    bool GetLessonMovementCenter(FVector& Center) const;
+    bool GetLessonMovementFront(FVector& Front) const;
+    /** Called before the existing scripted fade reveals a lesson destination. */
+    bool CorrectLessonArrival();
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="CNA|Training|Movement", meta=(ClampMin="0", Units="cm/s"))
     float TrainingSmoothMoveSpeed = 150.f;
     /** World-space offset from the placed patient actor, in centimetres. Updates live in PIE. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="CNA|Training|Popups", meta=(Units="cm", DisplayName="Transfer Instruction Offset"))
     FVector StatusPanelOffset = FVector(0.f, 0.f, 115.f);
+    /** Offset from the moving pelvis: X away from viewer, Y to viewer's right, Z up. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="CNA|Training|Popups", meta=(Units="cm", DisplayName="Carry Popup Offset"))
+    FVector CarryPopupOffset = FVector(0.f, 85.f, 65.f);
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="CNA|Training|Popups", meta=(Units="cm"))
     FVector WrongAnswerPopupOffset = FVector::ZeroVector;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="CNA|Training|Popups", meta=(Units="cm"))
@@ -78,6 +97,9 @@ public:
     FVector VideoStatusPopupOffset = FVector::ZeroVector;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="CNA|Training|Popups", meta=(ClampMin="0.01", DisplayName="Transfer Instruction Scale"))
     float StatusPanelScale = .06f;
+    /** Additional padding below the final score/time result, in widget pixels. Updates live in PIE. */
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="CNA|Training|Popups", meta=(ClampMin="0", DisplayName="Result Popup Extra Bottom Padding"))
+    float ResultPopupExtraBottomPadding = 24.f;
     bool HandleInterruptedLift();
     void ScheduleLiftRetry();
     void SetTrainingStage(EGuidedTrainingStage Stage);
@@ -153,6 +175,10 @@ private:
     void InitializeTrainingUI();
     void UpdateTrainingUI();
     void UpdateStatus();
+    void ApplyResultPopupPadding(class UUserWidget* Widget);
+    bool bStatusPaddingCaptured = false;
+    FVector4 StatusBasePadding = FVector4(0.f, 0.f, 0.f, 0.f);
+    FVector CarryStatusLocation(const APawn* Pawn) const;
     void ApplyPopupOffset(UWidgetComponent* Panel, const FVector& Offset);
     TMap<TWeakObjectPtr<UWidgetComponent>, FVector> PopupBaseLocations;
     AActor* FindLesson(int32 ID) const;
@@ -166,6 +192,15 @@ private:
     bool bStatusAttempted = false;
     bool bWasMovementLocked = false;
     void CaptureMovementOrigin() const;
+    void PrepareLessonArrival();
+    void UpdateWalkHologram();
+    bool bInitialLessonPrepared = false;
+    bool bLessonArrivalPending = false;
+    bool bLessonRelocating = false;
+    FTimerHandle LessonArrivalTimer;
+    UPROPERTY(Transient) TObjectPtr<UStaticMeshComponent> WalkHologram;
+    UPROPERTY() TObjectPtr<UMaterialInterface> WalkHologramMaterial;
+    mutable TWeakObjectPtr<UTrainingMediaControllerComponent> LessonMediaController;
     mutable bool bMovementOriginValid = false;
     mutable FVector MovementOrigin = FVector::ZeroVector;
     FTimerHandle TrainingTransitionTimer;
